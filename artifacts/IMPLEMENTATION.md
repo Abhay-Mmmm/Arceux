@@ -1,6 +1,6 @@
 # Arceux — Implementation Overview
 
-**Version:** 0.4 (Day 1 Fixes v2 — Groq LLM, Interactive Agents, Action Sets)  
+**Version:** 0.4.1 (Day 1 Fixes v2.1 — Bug Fixes & Error Handling)  
 **Last Updated:** 2026-04-25  
 **Status:** Active Development — Early Prototype
 
