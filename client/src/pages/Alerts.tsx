@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Alert } from '../types';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
-import { X, Bot, Shield, FileText, Search, Filter, Loader2, RefreshCw } from 'lucide-react';
+import { X, Bot, Shield, FileText, Search, Filter, Loader2, RefreshCw, Download } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { fetchAlerts, updateAlertStatus, executeAction } from '../services/api';
 
@@ -105,12 +105,43 @@ const Alerts: React.FC = () => {
             });
             setActionStates(prev => ({ ...prev, [key]: 'done' }));
         } catch (err) {
-            console.error('Failed to execute action:', err);
-            setActionStates(prev => ({ ...prev, [key]: 'error' }));
-        }
-    };
+console.error('Failed to execute action:', err);
+    setActionStates(prev => ({ ...prev, [key]: 'error' }));
+  }
+};
 
-    // Fetch alerts from API
+// Export filtered alerts to CSV
+const handleExportCSV = () => {
+  const headers = ['alert_id', 'timestamp', 'user', 'threat_type', 'severity', 'status', 'explanation', 'recommendation'];
+  const csvRows = [headers.join(',')];
+
+  filteredAlerts.forEach(alert => {
+    const row = [
+      alert.id || '',
+      alert.timestamp || '',
+      alert.user || '',
+      alert.title || '',
+      alert.severity || '',
+      alert.status || '',
+      `"${(alert.description || '').replace(/"/g, '""')}"`,
+      `"${(alert.recommendedActions?.join('; ') || '').replace(/"/g, '""')}"`
+    ];
+    csvRows.push(row.join(','));
+  });
+
+  const csvContent = csvRows.join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  const dateStr = new Date().toISOString().split('T')[0];
+  link.setAttribute('href', url);
+  link.setAttribute('download', `arceux-alerts-${dateStr}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+// Fetch alerts from API
     const loadAlerts = useCallback(async () => {
         setRefreshing(true);
         try {
@@ -187,7 +218,16 @@ const Alerts: React.FC = () => {
                         <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
                         Refresh
                     </Button>
-                    <Button variant="outline">Export CSV</Button>
+                    <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCSV}
+            disabled={filteredAlerts.length === 0}
+            className="gap-2"
+          >
+            <Download className="h-4 w-4" />
+            Export CSV
+          </Button>
                     <Button>Run Playbook</Button>
                 </div>
             </div>

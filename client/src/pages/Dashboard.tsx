@@ -111,9 +111,14 @@ const Dashboard: React.FC = () => {
     const [realtimeComponents, setRealtimeComponents] = useState<RealtimeComponent[]>([]);
     const [isLive, setIsLive] = useState(false);
 
-    // Live high-priority alerts
-    const [liveAlerts, setLiveAlerts] = useState<Alert[]>([]);
-    const [alertsLoading, setAlertsLoading] = useState(true);
+// Live high-priority alerts
+  const [liveAlerts, setLiveAlerts] = useState<Alert[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+
+  // System Check modal state
+  const [systemCheckLoading, setSystemCheckLoading] = useState(false);
+  const [systemCheckError, setSystemCheckError] = useState<string | null>(null);
+  const [systemCheckData, setSystemCheckData] = useState<{ components: RealtimeComponent[]; summary: { total_logs: number; total_alerts: number; pending_signals: number } } | null>(null);
 
     // Derive active service from real-time data
     const selectedService = useMemo(() =>
@@ -185,19 +190,29 @@ const Dashboard: React.FC = () => {
         setTimeout(() => setIsRefreshing(false), 1500);
     }, []);
 
-    const handleSystemCheck = () => {
-        setShowSystemCheck(true);
-        setCheckProgress(0);
-        const interval = setInterval(() => {
-            setCheckProgress(prev => {
-                if (prev >= 100) {
-                    clearInterval(interval);
-                    return 100;
-                }
-                return prev + 10;
-            });
-        }, 200);
-    };
+const handleSystemCheck = () => {
+    setShowSystemCheck(true);
+    setSystemCheckLoading(true);
+    setSystemCheckError(null);
+    setSystemCheckData(null);
+    fetchSystemCheckData();
+  };
+
+  const fetchSystemCheckData = async () => {
+    setSystemCheckLoading(true);
+    setSystemCheckError(null);
+    try {
+      const data = await fetchRealtimeMetrics();
+      setSystemCheckData({
+        components: data.components,
+        summary: data.summary
+      });
+    } catch (err) {
+      setSystemCheckError('Could not reach backend');
+    } finally {
+      setSystemCheckLoading(false);
+    }
+  };
 
     const handleSendMessage = async () => {
         if (!chatInput.trim()) return;
@@ -486,28 +501,40 @@ const Dashboard: React.FC = () => {
                     </Card>
                 </div>
 
-                {/* ROW 2: Perf | Severity | Alerts | Compliance */}
-                <div className="col-span-2 row-span-5 flex flex-col min-h-0">
-                    <Card title="Perf" className="flex-1 min-h-0 overflow-hidden" noPadding>
-                        <div className="p-3 h-full flex flex-col justify-between gap-1">
-                            {[
-                                { label: 'CPU', value: 78, color: 'bg-orange-500' },
-                                { label: 'RAM', value: 45, color: 'bg-blue-500' },
-                                { label: 'NET', value: 92, color: 'bg-green-500' },
-                            ].map((item, idx) => (
-                                <div key={idx} className="flex-1 flex flex-col justify-center gap-1">
-                                    <div className="flex justify-between text-[10px] items-end">
-                                        <span className="text-muted-foreground font-medium">{item.label}</span>
-                                        <span className="font-mono font-bold">{item.value}%</span>
-                                    </div>
-                                    <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                                        <div className={cn("h-full", item.color)} style={{ width: `${item.value}%` }} />
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </Card>
-                </div>
+{/* ROW 2: System Metrics | Severity | Alerts | Compliance */}
+      <div className="col-span-2 row-span-5 flex flex-col min-h-0">
+        <Card title="System" className="flex-1 min-h-0 overflow-hidden" noPadding>
+          <div className="p-3 h-full flex flex-col justify-between gap-2">
+            <div className="flex-1 flex flex-col justify-center gap-1">
+              <div className="flex justify-between text-[10px] items-end">
+                <span className="text-muted-foreground font-medium">Total Logs</span>
+                <span className="font-mono font-bold">{realtimeComponents.reduce((acc, c) => acc + c.activity, 0) || 0}</span>
+              </div>
+              <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                <div className="h-full bg-blue-500" style={{ width: '60%' }} />
+              </div>
+            </div>
+            <div className="flex-1 flex flex-col justify-center gap-1">
+              <div className="flex justify-between text-[10px] items-end">
+                <span className="text-muted-foreground font-medium">Active Components</span>
+                <span className="font-mono font-bold">{realtimeComponents.filter(c => c.status === 'healthy').length}/{realtimeComponents.length}</span>
+              </div>
+              <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                <div className={cn("h-full", realtimeComponents.filter(c => c.status === 'healthy').length === realtimeComponents.length ? 'bg-green-500' : 'bg-yellow-500')} style={{ width: `${realtimeComponents.length > 0 ? (realtimeComponents.filter(c => c.status === 'healthy').length / realtimeComponents.length) * 100 : 0}%` }} />
+              </div>
+            </div>
+            <div className="flex-1 flex flex-col justify-center gap-1">
+              <div className="flex justify-between text-[10px] items-end">
+                <span className="text-muted-foreground font-medium">Avg Latency</span>
+                <span className="font-mono font-bold">{realtimeComponents.length > 0 ? Math.round(realtimeComponents.reduce((acc, c) => acc + c.latency, 0) / realtimeComponents.length) : 0}ms</span>
+              </div>
+              <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                <div className="h-full bg-purple-500" style={{ width: '45%' }} />
+              </div>
+            </div>
+          </div>
+        </Card>
+      </div>
 
                 <div className="col-span-3 row-span-5 flex flex-col min-h-0">
                     <Card title="Threats" className="flex-1 min-h-0 overflow-hidden" noPadding>
@@ -670,66 +697,88 @@ const Dashboard: React.FC = () => {
                             <div className="absolute top-2 left-2 text-[9px] text-muted-foreground uppercase tracking-widest">Real-time Metrics</div>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-2 text-center">
-                            <div className="p-2 rounded bg-muted/20">
-                                <div className="text-xs text-muted-foreground">Uptime</div>
-                                <div className="font-mono font-bold text-green-500">99.99%</div>
-                            </div>
-                            <div className="p-2 rounded bg-muted/20">
-                                <div className="text-xs text-muted-foreground">Error Rate</div>
-                                <div className="font-mono font-bold">0.001%</div>
-                            </div>
-                            <div className="p-2 rounded bg-muted/20">
-                                <div className="text-xs text-muted-foreground">Load</div>
-                                <div className="font-mono font-bold">45%</div>
-                            </div>
-                        </div>
+<div className="grid grid-cols-2 gap-2 text-center">
+              <div className="p-2 rounded bg-muted/20">
+                <div className="text-xs text-muted-foreground">Activity</div>
+                <div className="font-mono font-bold">{selectedService.activity}</div>
+              </div>
+              <div className="p-2 rounded bg-muted/20">
+                <div className="text-xs text-muted-foreground">Status</div>
+                <div className={cn("font-mono font-bold", selectedService.status === 'healthy' ? 'text-green-500' : selectedService.status === 'degraded' ? 'text-yellow-500' : 'text-red-500')}>
+                  {selectedService.status}
+                </div>
+              </div>
+            </div>
                     </div>
                 )}
             </Modal>
 
-            <Modal
-                isOpen={showSystemCheck}
-                onClose={() => setShowSystemCheck(false)}
-                title="System Diagnostic Check"
-            >
-                <div className="space-y-6 py-4">
-                    <div className="flex flex-col items-center justify-center gap-4">
-                        {checkProgress < 100 ? (
-                            <Loader2 className="h-12 w-12 text-primary animate-spin" />
-                        ) : (
-                            <CheckCircle2 className="h-12 w-12 text-green-500 animate-in zoom-in-50 duration-300" />
-                        )}
-                        <div className="text-center">
-                            <h3 className="font-semibold">{checkProgress < 100 ? 'Running Diagnostics...' : 'All Systems Operational'}</h3>
-                            <p className="text-xs text-muted-foreground mt-1">
-                                {checkProgress < 100 ? `Checking core services and network integrity...` : `Diagnostic completed successfully at ${new Date().toLocaleTimeString()}`}
-                            </p>
-                        </div>
-                    </div>
+<Modal
+      isOpen={showSystemCheck}
+      onClose={() => setShowSystemCheck(false)}
+      title="System Diagnostic Check"
+    >
+      <div className="space-y-4 py-4">
+        {systemCheckLoading ? (
+          <div className="flex flex-col items-center justify-center gap-4 py-8">
+            <Loader2 className="h-10 w-10 text-primary animate-spin" />
+            <p className="text-sm text-muted-foreground">Running diagnostics...</p>
+          </div>
+        ) : systemCheckError ? (
+          <div className="flex flex-col items-center justify-center gap-4 py-8">
+            <AlertTriangle className="h-10 w-10 text-red-500" />
+            <p className="text-sm text-red-400">{systemCheckError}</p>
+            <Button size="sm" onClick={fetchSystemCheckData}>Re-run</Button>
+          </div>
+        ) : systemCheckData ? (
+          <>
+            <div className="grid grid-cols-3 gap-3 text-center mb-4">
+              <div className="p-3 rounded-lg bg-muted/30 border border-border/50">
+                <div className="text-xs text-muted-foreground uppercase">Total Logs</div>
+                <div className="text-lg font-bold font-mono">{systemCheckData.summary.total_logs}</div>
+              </div>
+              <div className="p-3 rounded-lg bg-muted/30 border border-border/50">
+                <div className="text-xs text-muted-foreground uppercase">Alerts</div>
+                <div className="text-lg font-bold font-mono">{systemCheckData.summary.total_alerts}</div>
+              </div>
+              <div className="p-3 rounded-lg bg-muted/30 border border-border/50">
+                <div className="text-xs text-muted-foreground uppercase">Pending Signals</div>
+                <div className="text-lg font-bold font-mono">{systemCheckData.summary.pending_signals}</div>
+              </div>
+            </div>
 
-                    <div className="space-y-2">
-                        <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
-                            <div
-                                className="h-full bg-primary transition-all duration-200 ease-out"
-                                style={{ width: `${checkProgress}%` }}
-                            />
-                        </div>
-                        <div className="flex justify-between text-[10px] text-muted-foreground uppercase font-mono">
-                            <span>Initializing</span>
-                            <span>Verify Config</span>
-                            <span>Check Latency</span>
-                            <span>Done</span>
-                        </div>
+            <div className="space-y-2">
+              {systemCheckData.components.map((comp) => (
+                <div key={comp.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/20 border border-border/30">
+                  <div className="flex items-center gap-3">
+                    <div className={cn(
+                      "w-2 h-2 rounded-full",
+                      comp.status === 'healthy' ? 'bg-green-500' : comp.status === 'degraded' ? 'bg-yellow-500' : 'bg-red-500'
+                    )} />
+                    <div>
+                      <div className="text-xs font-medium">{comp.name}</div>
+                      <div className="text-[10px] text-muted-foreground">Activity: {comp.activity}</div>
                     </div>
-
-                    {checkProgress === 100 && (
-                        <div className="flex justify-center">
-                            <Button onClick={() => setShowSystemCheck(false)}>Close Report</Button>
-                        </div>
-                    )}
+                  </div>
+                  <div className="text-right">
+                    <div className={cn(
+                      "text-[10px] uppercase font-bold",
+                      comp.status === 'healthy' ? 'text-green-500' : comp.status === 'degraded' ? 'text-yellow-500' : 'text-red-500'
+                    )}>{comp.status}</div>
+                    <div className="text-xs font-mono">{comp.latency}ms</div>
+                  </div>
                 </div>
-            </Modal>
+              ))}
+            </div>
+
+            <div className="flex justify-center gap-2 pt-2">
+              <Button size="sm" variant="outline" onClick={fetchSystemCheckData}>Re-run</Button>
+              <Button size="sm" onClick={() => setShowSystemCheck(false)}>Close</Button>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </Modal>
 
         </div>
     );

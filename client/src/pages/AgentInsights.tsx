@@ -85,19 +85,28 @@ const AgentInsights: React.FC = () => {
         return () => clearInterval(id);
     }, [loadAgents]);
 
-    const handleTrigger = async () => {
-        setTriggering(true);
-        setTriggerMsg(null);
-        try {
-            const res = await triggerAgentPipeline();
-            setTriggerMsg({ text: res.message, ok: res.success });
-        } catch {
-            setTriggerMsg({ text: 'Failed to trigger pipeline. Is the backend running?', ok: false });
-        } finally {
-            setTriggering(false);
-            setTimeout(() => setTriggerMsg(null), 5000);
-        }
-    };
+const handleTrigger = async () => {
+    setTriggering(true);
+    setTriggerMsg(null);
+    try {
+      const res = await triggerAgentPipeline();
+      if (res.success) {
+        setTriggerMsg({ text: 'Pipeline queued ✓', ok: true });
+        // Trigger immediate refetch of agent status
+        loadAgents();
+        setTimeout(() => setTriggerMsg(null), 2000);
+      } else {
+        setTriggerMsg({ text: res.message, ok: false });
+        setTimeout(() => setTriggerMsg(null), 4000);
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to trigger pipeline. Is the backend running?';
+      setTriggerMsg({ text: errorMessage, ok: false });
+      setTimeout(() => setTriggerMsg(null), 4000);
+    } finally {
+      setTriggering(false);
+    }
+  };
 
     const isAnyRunning = agents.some(a => a.status === 'running');
     const selected = agents.find(a => a.name === selectedAgent) ?? null;
