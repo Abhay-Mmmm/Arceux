@@ -1,4 +1,4 @@
-# Arxis SOC Backend Dependencies
+# Arceux SOC Backend Dependencies
 
 # Core Framework
 fastapi
@@ -8,7 +8,8 @@ pydantic
 # AI Agents
 crewai
 langchain
-langchain-openai
+langchain-groq
+groq
 
 # Utilities
 python-dotenv

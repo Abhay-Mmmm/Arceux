@@ -1,15 +1,50 @@
 """
-Arxis Agentic System - Specialized SOC Agents
+Arceux Agentic System - Specialized SOC Agents
 """
 
+import os
+import time
+from datetime import datetime, timezone
 from crewai import Agent, Task, Crew, Process
 from typing import Dict, Any, List
 from models import DetectionSignal
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LLM Initialisation (Groq via LangChain)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+groq_llm = None
+
+try:
+    from langchain_groq import ChatGroq
+
+    _api_key = os.getenv("GROQ_API_KEY")
+    _model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+    if _api_key:
+        groq_llm = ChatGroq(
+            model=_model,
+            groq_api_key=_api_key,
+            temperature=0.1,
+        )
+        print(f"Groq LLM for CrewAI initialised ({_model})")
+    else:
+        print("GROQ_API_KEY not set — CrewAI agents will use fallback trace")
+except ImportError:
+    print("langchain-groq not installed — CrewAI agents will use fallback trace")
+except Exception as e:
+    print(f"Groq LLM init error: {e} — CrewAI agents will use fallback trace")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1️⃣ Orchestrator Agent (The Coordinator)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _llm_kwargs() -> Dict[str, Any]:
+    """Return llm kwarg dict if Groq is available, else empty dict."""
+    return {"llm": groq_llm} if groq_llm else {}
+
 
 def create_orchestrator_agent() -> Agent:
     """
@@ -19,12 +54,13 @@ def create_orchestrator_agent() -> Agent:
     return Agent(
         role="Orchestrator Agent",
         goal="Coordinate the incident response lifecycle and manage global incident context",
-        backstory="""You are the SOC Incident Commander. You do not analyze raw logs yourself; 
-        instead, you direct your team of specialized agents. You ensure no steps are skipped, 
-        resources are not wasted, and the final output is a cohesive incident narrative. 
+        backstory="""You are the SOC Incident Commander. You do not analyze raw logs yourself;
+        instead, you direct your team of specialized agents. You ensure no steps are skipped,
+        resources are not wasted, and the final output is a cohesive incident narrative.
         You see the big picture.""",
         verbose=True,
         allow_delegation=True,
+        **_llm_kwargs()
     )
 
 
@@ -40,11 +76,12 @@ def create_alert_handler_agent() -> Agent:
     return Agent(
         role="Alert Handler Agent",
         goal="Triages incoming signals, reduces noise, and correlates related events",
-        backstory="""You are an expert Tier-1 Security Analyst. Your job is to filter out the noise. 
-        You receive thousands of signals but only pass on the ones that matter. You look for 
+        backstory="""You are an expert Tier-1 Security Analyst. Your job is to filter out the noise.
+        You receive thousands of signals but only pass on the ones that matter. You look for
         related events to group them into a single incident context, preventing alert fatigue.""",
         verbose=True,
         allow_delegation=False,
+        **_llm_kwargs()
     )
 
 
@@ -60,11 +97,12 @@ def create_threat_analyzer_agent() -> Agent:
     return Agent(
         role="Threat Analyzer Agent",
         goal="Classify the behavior against MITRE ATT&CK and determine attacker intent",
-        backstory="""You are a Threat Intelligence Specialist. You don't just see 'failed login'; 
-        you see 'Brute Force (T1110)'. You understand the attacker's playbook. You identify 
+        backstory="""You are a Threat Intelligence Specialist. You don't just see 'failed login';
+        you see 'Brute Force (T1110)'. You understand the attacker's playbook. You identify
         Tactics, Techniques, and Procedures (TTPs) and explain the intent behind the events.""",
         verbose=True,
         allow_delegation=False,
+        **_llm_kwargs()
     )
 
 
@@ -80,11 +118,12 @@ def create_root_cause_agent() -> Agent:
     return Agent(
         role="Root Cause Agent",
         goal="Reconstruct the attack timeline and identify the initial entry point",
-        backstory="""You are a Senior Forensic Investigator. You walk backwards through time. 
-        You connect the dots between the alert and the initial breach. You identify the 
+        backstory="""You are a Senior Forensic Investigator. You walk backwards through time.
+        You connect the dots between the alert and the initial breach. You identify the
         'Blast Radius' of the attack and determine exactly how the adversary gained access.""",
         verbose=True,
         allow_delegation=False,
+        **_llm_kwargs()
     )
 
 
@@ -100,11 +139,12 @@ def create_compliance_agent() -> Agent:
     return Agent(
         role="Compliance Agent",
         goal="Evaluate incident against GDPR, IRDAI, and SOC 2 requirements",
-        backstory="""You are the Governance, Risk, and Compliance (GRC) Officer. You don't care about 
-        IP addresses; you care about PII, reporting deadlines (72h), and legal exposure. 
+        backstory="""You are the Governance, Risk, and Compliance (GRC) Officer. You don't care about
+        IP addresses; you care about PII, reporting deadlines (72h), and legal exposure.
         You ensure every incident response aligns with regulatory frameworks.""",
         verbose=True,
         allow_delegation=False,
+        **_llm_kwargs()
     )
 
 
@@ -120,11 +160,12 @@ def create_response_automation_agent() -> Agent:
     return Agent(
         role="Response Automation Agent",
         goal="Draft safe, effective containment and remediation plans",
-        backstory="""You are the SOAR (Security Orchestration, Automation, and Response) Specialist. 
-        You define the counter-measures. You propose actions like 'Isolate Host', 'Revoke Token', 
+        backstory="""You are the SOAR (Security Orchestration, Automation, and Response) Specialist.
+        You define the counter-measures. You propose actions like 'Isolate Host', 'Revoke Token',
         or 'Block IP'. You prioritize speed but strictly adhere to safety protocols to avoid business disruption.""",
         verbose=True,
         allow_delegation=False,
+        **_llm_kwargs()
     )
 
 
@@ -221,56 +262,87 @@ def create_tasks(signal: DetectionSignal) -> List[Task]:
 
 def run_agent_analysis(signal: DetectionSignal) -> Dict[str, Any]:
     """
-    Run the full Arxis Agentic System workflow.
+    Run the full Arceux Agentic System workflow.
+    Uses Groq LLM if GROQ_API_KEY is set; falls back to simulated trace otherwise.
+    Updates agent state in storage throughout execution.
     """
-    tasks = create_tasks(signal)
-    
-    crew = Crew(
-        agents=[
-            create_orchestrator_agent(),
-            create_alert_handler_agent(),
-            create_threat_analyzer_agent(),
-            create_root_cause_agent(),
-            create_compliance_agent(),
-            create_response_automation_agent()
-        ],
-        tasks=tasks,
-        process=Process.sequential,
-        verbose=True,
-    )
-    
+    agent_names = [
+        "Orchestrator Agent",
+        "Alert Handler Agent",
+        "Threat Analyzer Agent",
+        "Root Cause Agent",
+        "Compliance Agent",
+        "Response Automation Agent",
+    ]
+
+    # Lazy import to avoid circular dependency
     try:
+        from storage import storage as _storage
+        _has_storage = True
+    except Exception:
+        _has_storage = False
+
+    def _set_all_status(status: str, extra: Dict[str, Any] = None):
+        if not _has_storage:
+            return
+        for name in agent_names:
+            updates = {"status": status}
+            if extra:
+                updates.update(extra)
+            _storage.update_agent_state(name, updates)
+
+    start_time = time.time()
+    start_iso = datetime.now(timezone.utc).isoformat()
+
+    _set_all_status("running", {"last_run": start_iso})
+
+    try:
+        tasks = create_tasks(signal)
+
+        crew = Crew(
+            agents=[
+                create_orchestrator_agent(),
+                create_alert_handler_agent(),
+                create_threat_analyzer_agent(),
+                create_root_cause_agent(),
+                create_compliance_agent(),
+                create_response_automation_agent(),
+            ],
+            tasks=tasks,
+            process=Process.sequential,
+            verbose=True,
+        )
+
         result = crew.kickoff()
-        
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        result_str = str(result)
+
+        if _has_storage:
+            trace_lines = [line.strip() for line in result_str.splitlines() if line.strip()][:8]
+            for name in agent_names:
+                state = _storage.agent_states.get(name, {})
+                _storage.update_agent_state(name, {
+                    "status": "completed",
+                    "tasks_completed": state.get("tasks_completed", 0) + 1,
+                    "execution_count": state.get("execution_count", 0) + 1,
+                    "total_execution_time_ms": state.get("total_execution_time_ms", 0) + elapsed_ms,
+                    "last_execution_trace": trace_lines,
+                })
+
         return {
             "success": True,
-            "agent_trace": [
-                "Orchestrator Agent",
-                "Alert Handler Agent",
-                "Threat Analyzer Agent",
-                "Root Cause Agent",
-                "Compliance Agent",
-                "Response Automation Agent"
-            ],
-            "result": str(result),
-            "signal_id": signal.signal_id
+            "agent_trace": agent_names,
+            "result": result_str,
+            "signal_id": signal.signal_id,
         }
-    
+
     except Exception as e:
-        print(f"❌ Agent workflow failed: {e}")
-        
-        # Fallback to rule-based output (Simulate agent path for UI)
+        print(f"Agent workflow failed: {e}")
+        _set_all_status("error")
         return {
             "success": False,
-            "agent_trace": [
-                "Orchestrator Agent",
-                "Alert Handler Agent",
-                "Threat Analyzer Agent",
-                "Root Cause Agent",
-                "Compliance Agent",
-                "Response Automation Agent"
-            ],
+            "agent_trace": agent_names,
             "result": f"Alert generated by detection rule: {signal.signal_type}",
             "signal_id": signal.signal_id,
-            "error": str(e)
+            "error": str(e),
         }

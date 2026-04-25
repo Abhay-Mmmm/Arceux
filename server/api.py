@@ -1,5 +1,5 @@
 """
-Arxis SOC Backend API
+Arceux SOC Backend API
 
 Main FastAPI application serving:
 1. Log ingestion endpoint
@@ -23,7 +23,7 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from models import SecurityLog, Alert, MetricsSummary, Severity
 from storage import storage
@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 app = FastAPI(
-    title="Arxis SOC Backend",
+    title="Arceux SOC Backend",
     description="AI-native Security Operations Center POC",
     version="0.2.0",
     lifespan=lifespan
@@ -196,6 +196,152 @@ async def get_alert(alert_id: str):
     return Alert(**alert)
 
 
+class AlertStatusUpdate(BaseModel):
+    """Body for PATCH /alerts/{id}/status."""
+    status: str  # open | investigating | resolved
+
+
+class ExecuteActionRequest(BaseModel):
+    """Body for POST /actions/execute."""
+    action_type: str
+    alert_id: str
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+
+
+@app.patch("/alerts/{alert_id}/status", response_model=Alert)
+async def update_alert_status(alert_id: str, update: AlertStatusUpdate):
+    """
+    Update alert status.
+
+    Accepts: { "status": "open" | "investigating" | "resolved" }
+    Returns the updated alert object.
+    """
+    valid_statuses = {"open", "investigating", "resolved"}
+    if update.status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {sorted(valid_statuses)}"
+        )
+
+    success = storage.update_alert_status(alert_id, update.status)
+    if not success:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    alert_dict = storage.get_alert_by_id(alert_id)
+    return Alert(**alert_dict)
+
+
+@app.post("/actions/execute")
+async def execute_action(request: ExecuteActionRequest):
+    """
+    Execute a security response action.
+
+    Supported action_types:
+    - block_ip: Logs the source IP as blocked, adds note to the alert
+    - reset_credentials: Flags user credentials for reset, adds note to the alert
+
+    Returns: { "success": true, "message": string, "action_type": string }
+    """
+    alert_dict = storage.get_alert_by_id(request.alert_id)
+    if not alert_dict:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    alert_user = alert_dict.get("user", "unknown")
+    raw_events = alert_dict.get("raw_events", [])
+    alert_ip = raw_events[0].get("ip", "unknown") if raw_events else "unknown"
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    if request.action_type == "block_ip":
+        storage.blocked_ips.add(alert_ip)
+        note = f"[ACTION] IP {alert_ip} blocked at {timestamp}"
+        message = f"IP {alert_ip} has been blocked. Network team notified."
+    elif request.action_type == "reset_credentials":
+        storage.flagged_users.add(alert_user)
+        note = f"[ACTION] Credentials for user '{alert_user}' flagged for reset at {timestamp}"
+        message = f"Credentials for user '{alert_user}' flagged for reset. Identity team notified."
+    else:
+        note = f"[ACTION] {request.action_type} executed at {timestamp}"
+        message = f"Action '{request.action_type}' logged successfully."
+
+    storage.add_executed_action({
+        "action_type": request.action_type,
+        "alert_id": request.alert_id,
+        "details": message,
+        "timestamp": timestamp,
+        "parameters": request.parameters,
+    })
+    storage.add_alert_note(request.alert_id, note)
+
+    return {
+        "success": True,
+        "message": message,
+        "action_type": request.action_type,
+    }
+
+
+@app.get("/agents/status")
+async def get_agents_status():
+    """
+    Get the current status of all AI agents.
+
+    Returns a list of agent state objects with:
+    - name, status (idle/running/completed/error)
+    - last_run timestamp, tasks_completed, avg_execution_time_ms
+    - last_execution_trace (lines from most recent run)
+    """
+    states = storage.get_all_agent_states()
+    for state in states:
+        count = state.get("execution_count", 0)
+        total_ms = state.get("total_execution_time_ms", 0)
+        state["avg_execution_time_ms"] = (total_ms // count) if count > 0 else 0
+    return states
+
+
+@app.post("/agents/trigger")
+async def trigger_agent_pipeline():
+    """
+    Queue the agent pipeline to run on the most recent alert's context.
+
+    Creates a synthetic detection signal from the latest alert and adds it
+    to the processing queue. The background processor picks it up within 5 s.
+    """
+    alerts = storage.get_all_alerts()
+    if not alerts:
+        return {"success": False, "message": "No alerts in system. Wait for log events to generate detections."}
+
+    # Prevent double-triggering if already running
+    agent_states = storage.get_all_agent_states()
+    if any(s.get("status") == "running" for s in agent_states):
+        return {"success": False, "message": "Agent pipeline is currently running. Please wait."}
+
+    latest = alerts[-1]
+    threat_type = latest.get("threat_type", "BRUTE_FORCE")
+
+    _type_map = {
+        "BRUTE_FORCE": "BRUTE_FORCE",
+        "SUSPICIOUS_LOGIN": "SUSPICIOUS_LOGIN",
+        "INSIDER_THREAT": "INSIDER_THREAT",
+    }
+    signal_type_str = _type_map.get(threat_type, "BRUTE_FORCE")
+
+    from models import DetectionSignal, SignalType
+
+    synthetic = DetectionSignal(
+        signal_id=str(uuid.uuid4()),
+        signal_type=SignalType(signal_type_str),
+        user=latest.get("user", "unknown"),
+        severity=Severity(latest.get("severity", "HIGH")),
+        events=[],
+        metadata={"triggered_manually": True, "source_alert_id": latest.get("alert_id", "")},
+    )
+    storage.add_signal(synthetic)
+
+    return {
+        "success": True,
+        "message": f"Pipeline queued for user '{latest.get('user', 'unknown')}'. Updates visible in ~5 s.",
+    }
+
+
 @app.get("/metrics", response_model=MetricsSummary)
 async def get_metrics():
     """
@@ -218,7 +364,7 @@ async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "service": "arxis-soc-backend",
+        "service": "arceux-soc-backend",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
@@ -308,7 +454,7 @@ async def chat_with_ai(request: ChatRequest):
         
     except ImportError:
         return {
-            "response": "AI chatbot is not configured. Please check OpenAI API key.",
+            "response": "AI chatbot module could not be loaded. Check server logs.",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "context_used": False
         }
@@ -459,7 +605,7 @@ if __name__ == "__main__":
     print("""
     ╔═══════════════════════════════════════════╗
     ║                                           ║
-    ║           🛡️  ARXIS SOC BACKEND 🛡️         ║
+    ║          🛡️  ARCEUX SOC BACKEND 🛡️         ║
     ║                                           ║
     ║  AI-Native Security Operations Center     ║
     ║  Powered by CrewAI                        ║

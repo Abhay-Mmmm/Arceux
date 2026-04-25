@@ -1,5 +1,5 @@
 """
-Detection Engine for Arxis SOC
+Detection Engine for Arceux SOC
 
 Rules-based threat detection that analyzes incoming logs and generates signals.
 Each detection rule has a clear, testable condition.

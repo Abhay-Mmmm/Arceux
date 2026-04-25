@@ -1,7 +1,7 @@
 """
-Arxis SOC - Unified Entry Point
+Arceux SOC - Unified Entry Point
 
-This script orchestrates the entire Arxis SOC system:
+This script orchestrates the entire Arceux SOC system:
 1. Starts the FastAPI server with agent processing
 2. Launches the synthetic log generator
 3. Manages graceful shutdown
@@ -124,7 +124,7 @@ def signal_handler(sig, frame):
     time.sleep(2)
     
     print("✅ All components stopped.")
-    print("👋 Arxis SOC shutdown complete.\n")
+    print("👋 Arceux SOC shutdown complete.\n")
     sys.exit(0)
 
 
@@ -146,7 +146,7 @@ def main():
     print("""
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║              🛡️  ARXIS SOC - UNIFIED SYSTEM 🛡️             ║
+║            🛡️  ARCEUX SOC - UNIFIED SYSTEM 🛡️              ║
 ║                                                           ║
 ║  AI-Native Security Operations Center                    ║
 ║  Powered by CrewAI + FastAPI                             ║
@@ -183,7 +183,7 @@ def main():
     
     # Print status
     print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("🎉 Arxis SOC is now RUNNING!")
+    print("🎉 Arceux SOC is now RUNNING!")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("\n📡 API Endpoints:")
     print("   • Base:         http://localhost:8000")

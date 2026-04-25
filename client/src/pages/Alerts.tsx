@@ -4,7 +4,7 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { X, Bot, Shield, FileText, Search, Filter, Loader2, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { fetchAlerts } from '../services/api';
+import { fetchAlerts, updateAlertStatus, executeAction } from '../services/api';
 
 const Alerts: React.FC = () => {
     const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -16,6 +16,9 @@ const Alerts: React.FC = () => {
     // Track local modifications that haven't been synced to backend yet
     // Key: alert ID, Value: partial alert updates
     const [localModifications, setLocalModifications] = useState<Record<string, Partial<Alert>>>({});
+
+    // Track execute-button state per alert+action: key = `${alertId}-${actionIndex}`
+    const [actionStates, setActionStates] = useState<Record<string, 'executing' | 'done' | 'error'>>({});
 
     // Derive selectedAlert from alerts array to ensure it's always in sync
     const selectedAlert = selectedAlertId ? alerts.find(a => a.id === selectedAlertId) || null : null;
@@ -54,27 +57,57 @@ const Alerts: React.FC = () => {
         }
     };
 
-    // Handle take ownership
+    // Handle take ownership — optimistic update + backend sync
     const handleTakeOwnership = async () => {
         if (!selectedAlert) return;
 
-        // Track this modification locally so it persists across backend refreshes
+        // Optimistic: update local state immediately
         setLocalModifications(prev => ({
             ...prev,
             [selectedAlert.id]: { status: 'investigating' as const }
         }));
-
-        // Update local state immediately for optimistic UI
-        const updatedAlerts = alerts.map(a =>
-            a.id === selectedAlert.id ? { ...a, status: 'investigating' as const } : a
+        setAlerts(prev =>
+            prev.map(a => a.id === selectedAlert.id ? { ...a, status: 'investigating' as const } : a)
         );
-        setAlerts(updatedAlerts);
-        // No need to update selectedAlert separately - it's derived from alerts!
 
-        // TODO: Send update to backend API
-        // await updateAlertStatus(selectedAlert.id, 'investigating');
-        // On success, remove from localModifications:
-        // setLocalModifications(prev => { const {[selectedAlert.id]: _, ...rest} = prev; return rest; });
+        try {
+            await updateAlertStatus(selectedAlert.id, 'investigating');
+            // Backend is now source of truth — clear the local override
+            setLocalModifications(prev => {
+                const { [selectedAlert.id]: _removed, ...rest } = prev;
+                return rest;
+            });
+        } catch (err) {
+            console.error('Failed to sync status to backend:', err);
+            // Keep localModifications so UI stays correct despite backend failure
+        }
+    };
+
+    // Execute a recommended action against the selected alert
+    const handleExecuteAction = async (action: string, index: number) => {
+        if (!selectedAlert) return;
+
+        const key = `${selectedAlert.id}-${index}`;
+        setActionStates(prev => ({ ...prev, [key]: 'executing' }));
+
+        // Determine action_type from the action text
+        const lower = action.toLowerCase();
+        let actionType = 'block_ip';
+        if (lower.includes('reset') || lower.includes('credential') || lower.includes('password')) {
+            actionType = 'reset_credentials';
+        }
+
+        try {
+            await executeAction({
+                action_type: actionType,
+                alert_id: selectedAlert.id,
+                parameters: { action_text: action },
+            });
+            setActionStates(prev => ({ ...prev, [key]: 'done' }));
+        } catch (err) {
+            console.error('Failed to execute action:', err);
+            setActionStates(prev => ({ ...prev, [key]: 'error' }));
+        }
     };
 
     // Fetch alerts from API
@@ -367,12 +400,32 @@ const Alerts: React.FC = () => {
                                     <Shield className="h-4 w-4" /> Recommended Actions
                                 </h3>
                                 <div className="flex flex-col gap-2">
-                                    {selectedAlert.recommendedActions?.map((action, i) => (
-                                        <div key={i} className="flex items-center justify-between p-3 rounded-md bg-background border border-border">
-                                            <span className="text-sm font-medium">{action}</span>
-                                            <Button size="sm" variant="secondary">Execute</Button>
-                                        </div>
-                                    ))}
+                                    {selectedAlert.recommendedActions?.map((action, i) => {
+                                        const key = `${selectedAlert.id}-${i}`;
+                                        const state = actionStates[key];
+                                        return (
+                                            <div key={i} className="flex items-center justify-between p-3 rounded-md bg-background border border-border">
+                                                <span className="text-sm font-medium">{action}</span>
+                                                <Button
+                                                    size="sm"
+                                                    variant={state === 'done' ? 'ghost' : 'secondary'}
+                                                    disabled={state === 'executing' || state === 'done'}
+                                                    onClick={() => handleExecuteAction(action, i)}
+                                                    className={cn(state === 'done' && 'text-green-500')}
+                                                >
+                                                    {state === 'executing' ? (
+                                                        <><Loader2 className="h-3 w-3 animate-spin mr-1" />Executing</>
+                                                    ) : state === 'done' ? (
+                                                        'Done ✓'
+                                                    ) : state === 'error' ? (
+                                                        'Retry'
+                                                    ) : (
+                                                        'Execute'
+                                                    )}
+                                                </Button>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             </section>
                         </div>

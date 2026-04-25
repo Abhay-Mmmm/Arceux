@@ -1,4 +1,4 @@
-# 🚀 Arxis SOC - Complete System Startup Guide
+# 🚀 Arceux SOC - Complete System Startup Guide
 
 ## Quick Start (2 Steps)
 
@@ -132,4 +132,4 @@ The system generates realistic security events and demonstrates:
 
 ---
 
-**You're ready to experience the Arxis SOC!** 🛡️
+**You're ready to experience the Arceux SOC!** 🛡️

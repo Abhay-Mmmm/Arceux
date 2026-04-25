@@ -1,6 +1,6 @@
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║                                                                           ║
-║                      🛡️  ARXIS SOC BACKEND  🛡️                            ║
+║                     🛡️  ARCEUX SOC BACKEND  🛡️                            ║
 ║                   AI-Native Security Operations Center                    ║
 ║                                                                           ║
 ║                         ✅ COMPLETE & READY TO RUN                         ║
@@ -176,7 +176,7 @@ Core Components:
 
 1. "This is not alerting, this is REASONING"
    Traditional SOC: Rules → Alert
-   Arxis:           Rules → Multi-Agent Reasoning → Explained Alert
+   Arceux:          Rules → Multi-Agent Reasoning → Explained Alert
 
 2. "Each alert is a mini SOC team"
    5 agents collaborate like human analysts would

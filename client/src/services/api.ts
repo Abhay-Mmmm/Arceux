@@ -1,5 +1,5 @@
 /**
- * API Service for Arxis Frontend
+ * API Service for Arceux Frontend
  * 
  * Handles all communication with the backend API
  */
@@ -23,6 +23,7 @@ interface BackendAlert {
     agent_trace: string[];
     raw_events: any[];
     metadata: Record<string, any>;
+    status?: string; // 'open' | 'investigating' | 'resolved'
 }
 
 interface Metrics {
@@ -109,7 +110,7 @@ function transformBackendAlert(backendAlert: BackendAlert): Alert {
         title: backendAlert.threat_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
         description: backendAlert.explanation,
         timestamp: backendAlert.timestamp, // Return raw ISO timestamp, let UI format it
-        status: 'open', // Backend doesn't track status yet
+        status: (backendAlert.status as 'open' | 'investigating' | 'resolved') || 'open',
         confidence: 95, // High confidence from AI agents
         user: backendAlert.user,
         asset,
@@ -272,6 +273,92 @@ export async function ingestLog(log: {
         return await response.json();
     } catch (error) {
         console.error('Failed to ingest log:', error);
+        throw error;
+    }
+}
+
+/**
+ * Update the status of an alert (open | investigating | resolved)
+ */
+export async function updateAlertStatus(
+    alertId: string,
+    status: 'open' | 'investigating' | 'resolved'
+): Promise<Alert> {
+    const response = await fetch(`${API_BASE_URL}/alerts/${alertId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const backendAlert: BackendAlert = await response.json();
+    return transformBackendAlert(backendAlert);
+}
+
+/**
+ * Execute a security response action against an alert
+ */
+export async function executeAction(payload: {
+    action_type: string;
+    alert_id: string;
+    parameters?: Record<string, any>;
+}): Promise<{ success: boolean; message: string; action_type: string }> {
+    const response = await fetch(`${API_BASE_URL}/actions/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return await response.json();
+}
+
+/**
+ * Agent status returned by GET /agents/status
+ */
+export interface AgentStatus {
+    name: string;
+    status: 'idle' | 'running' | 'completed' | 'error';
+    last_run: string | null;
+    tasks_completed: number;
+    execution_count: number;
+    avg_execution_time_ms: number;
+    last_execution_trace: string[];
+}
+
+/**
+ * Fetch the current status of all AI agents
+ */
+export async function fetchAgentStatus(): Promise<AgentStatus[]> {
+    try {
+        const response = await fetch(`${API_BASE_URL}/agents/status`);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        return await response.json();
+    } catch (error) {
+        console.error('Failed to fetch agent status:', error);
+        throw error;
+    }
+}
+
+/**
+ * Trigger the agent pipeline on the most recent alert
+ */
+export async function triggerAgentPipeline(): Promise<{ success: boolean; message: string }> {
+    try {
+        const response = await fetch(`${API_BASE_URL}/agents/trigger`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        return await response.json();
+    } catch (error) {
+        console.error('Failed to trigger agent pipeline:', error);
         throw error;
     }
 }

@@ -1,18 +1,27 @@
 """
-In-Memory Storage for Arxis SOC POC
+In-Memory Storage for Arceux SOC POC
 
 Simple, elegant in-memory storage with JSON persistence.
 """
 
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from pathlib import Path
 from datetime import datetime
 from models import SecurityLog, DetectionSignal, Alert, Severity
 from threading import Lock
 
+_AGENT_NAMES = [
+    "Orchestrator Agent",
+    "Alert Handler Agent",
+    "Threat Analyzer Agent",
+    "Root Cause Agent",
+    "Compliance Agent",
+    "Response Automation Agent",
+]
 
-class ArxisStorage:
+
+class ArceuxStorage:
     """Thread-safe in-memory storage with optional JSON persistence."""
     
     def __init__(self, data_dir: str = "data"):
@@ -23,7 +32,26 @@ class ArxisStorage:
         self.logs: List[Dict[str, Any]] = []
         self.signals: List[Dict[str, Any]] = []
         self.alerts: List[Dict[str, Any]] = []
-        
+        self.executed_actions: List[Dict[str, Any]] = []
+
+        # Action tracking sets
+        self.blocked_ips: Set[str] = set()
+        self.flagged_users: Set[str] = set()
+
+        # Per-agent state tracking
+        self.agent_states: Dict[str, Dict[str, Any]] = {
+            name: {
+                "name": name,
+                "status": "idle",
+                "last_run": None,
+                "tasks_completed": 0,
+                "execution_count": 0,
+                "total_execution_time_ms": 0,
+                "last_execution_trace": [],
+            }
+            for name in _AGENT_NAMES
+        }
+
         # Thread safety
         self._lock = Lock()
         
@@ -103,6 +131,51 @@ class ArxisStorage:
         with self._lock:
             return [a for a in self.alerts if a["severity"] == severity.value]
     
+    def update_alert_status(self, alert_id: str, status: str) -> bool:
+        """Update the status field of an alert."""
+        with self._lock:
+            for alert in self.alerts:
+                if alert["alert_id"] == alert_id:
+                    alert["status"] = status
+                    self._persist_to_disk()
+                    return True
+        return False
+
+    def add_alert_note(self, alert_id: str, note: str) -> bool:
+        """Append a note to an alert's metadata.notes list."""
+        with self._lock:
+            for alert in self.alerts:
+                if alert["alert_id"] == alert_id:
+                    if "notes" not in alert.setdefault("metadata", {}):
+                        alert["metadata"]["notes"] = []
+                    alert["metadata"]["notes"].append({
+                        "text": note,
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    self._persist_to_disk()
+                    return True
+        return False
+
+    def add_executed_action(self, action: Dict[str, Any]) -> None:
+        """Log an executed response action."""
+        with self._lock:
+            self.executed_actions.append(action)
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # Agent State
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    def update_agent_state(self, agent_name: str, updates: Dict[str, Any]) -> None:
+        """Update state fields for a specific agent."""
+        with self._lock:
+            if agent_name in self.agent_states:
+                self.agent_states[agent_name].update(updates)
+
+    def get_all_agent_states(self) -> List[Dict[str, Any]]:
+        """Return a snapshot of all agent states."""
+        with self._lock:
+            return [dict(s) for s in self.agent_states.values()]
+
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Metrics
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -167,4 +240,4 @@ class ArxisStorage:
 
 
 # Global storage instance
-storage = ArxisStorage()
+storage = ArceuxStorage()

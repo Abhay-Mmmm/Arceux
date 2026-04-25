@@ -469,7 +469,7 @@ const Dashboard: React.FC = () => {
                                 <div className="relative">
                                     <input
                                         className="w-full rounded-md border border-input bg-background/50 px-2.5 py-1.5 pr-8 text-[11px] shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                        placeholder="Command Arxis..."
+                                        placeholder="Command Arceux..."
                                         value={chatInput}
                                         onChange={(e) => setChatInput(e.target.value)}
                                         onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}

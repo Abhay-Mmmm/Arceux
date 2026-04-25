@@ -1,4 +1,4 @@
-# 🛡️ Arxis SOC Backend
+# 🛡️ Arceux SOC Backend
 
 **AI-Native Security Operations Center - Proof of Concept**
 
@@ -362,7 +362,7 @@ This is a proof-of-concept. Feel free to fork and experiment!
 
 ## 📧 Questions?
 
-This backend is part of the **Arxis SOC POC** project.
+This backend is part of the **Arceux SOC POC** project.
 
 **Built by**: Senior Backend Engineer  
 **Stack**: Python 3.11 + FastAPI + CrewAI  

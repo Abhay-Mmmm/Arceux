@@ -1,4 +1,4 @@
-# 🔗 Arxis Frontend-Backend Integration Guide
+# 🔗 Arceux Frontend-Backend Integration Guide
 
 ## ✅ Integration Complete
 

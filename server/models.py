@@ -1,5 +1,5 @@
 """
-Data Models for Arxis SOC
+Data Models for Arceux SOC
 
 Pydantic models defining the shape of data flowing through the system.
 """
@@ -84,6 +84,7 @@ class Alert(BaseModel):
     agent_trace: List[str]
     raw_events: List[Dict[str, Any]]
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    status: str = "open"  # open | investigating | resolved
 
 
 class MetricsSummary(BaseModel):

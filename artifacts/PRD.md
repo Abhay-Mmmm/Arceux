@@ -1,11 +1,11 @@
 
-# Arxis SOC – Proof of Concept (POC) PRD
+# Arceux SOC – Proof of Concept (POC) PRD
 
 ## Version
 0.2 (POC / Demo with CrewAI Agents)
 
 ## Objective
-Build a lightweight, fast POC of the Arxis SOC platform that demonstrates:
+Build a lightweight, fast POC of the Arceux SOC platform that demonstrates:
 - Live synthetic log ingestion
 - Real-time alert detection
 - Multi-agent AI reasoning using CrewAI
@@ -277,7 +277,7 @@ Showcase agentic SOC behavior visually.
 ## Suggested Repo Structure
 
 ```text
-arxis-poc/
+arceux-poc/
 ├── agents/             # CrewAI Agent definitions
 │   ├── context_agent.py
 │   ├── explanation_agent.py

@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Arxis SOC Backend - Startup Script
+# Arceux SOC Backend - Startup Script
 
-echo "🛡️  Starting Arxis SOC Backend..."
+echo "🛡️  Starting Arceux SOC Backend..."
 echo ""
 
 # Check if virtual environment is activated

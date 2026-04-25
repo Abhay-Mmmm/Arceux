@@ -2,7 +2,7 @@
 ║                                                                           ║
 ║             🔗  FRONTEND-BACKEND CONNECTION COMPLETE  🔗                  ║
 ║                                                                           ║
-║                    Arxis SOC is Now Fully Integrated                     ║
+║                   Arceux SOC is Now Fully Integrated                     ║
 ║                                                                           ║
 ╚═══════════════════════════════════════════════════════════════════════════╝
 
@@ -355,7 +355,7 @@ This is a COMPLETE end-to-end AI SOC platform!
 
                          🚀 READY FOR DEMO 🚀
 
-          Your Arxis SOC is fully operational and connected.
+          Your Arceux SOC is fully operational and connected.
               Start the backend, watch the magic happen!
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

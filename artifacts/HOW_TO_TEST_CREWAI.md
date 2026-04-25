@@ -86,7 +86,7 @@ In your terminal running `python3 main.py`, you'll see:
 
 ---
 
-## 🎯 **How CrewAI Works in Arxis**
+## 🎯 **How CrewAI Works in Arceux**
 
 ### **Flow:**
 

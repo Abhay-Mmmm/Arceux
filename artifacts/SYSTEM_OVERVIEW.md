@@ -1,4 +1,4 @@
-# 🎯 Arxis SOC - System Overview
+# 🎯 Arceux SOC - System Overview
 
 ## Architecture Diagram
 
@@ -224,4 +224,4 @@ Then open: **http://localhost:5173**
 
 ---
 
-**The Arxis SOC is now a complete, real-time, AI-powered security operations center!** 🛡️
+**The Arceux SOC is now a complete, real-time, AI-powered security operations center!** 🛡️

@@ -1,4 +1,4 @@
-# 🚀 Arxis Backend - Quick Start
+# 🚀 Arceux Backend - Quick Start
 
 ## Prerequisites
 - Python 3.11+
@@ -132,4 +132,4 @@ curl http://localhost:8000/debug/signals
 
 ---
 
-**You're ready to run Arxis SOC!** 🛡️
+**You're ready to run Arceux SOC!** 🛡️

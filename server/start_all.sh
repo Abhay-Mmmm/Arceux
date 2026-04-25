@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Arxis SOC - Complete System Startup
+# Arceux SOC - Complete System Startup
 
 echo "╔═══════════════════════════════════════════╗"
 echo "║                                           ║"
-echo "║          🛡️  ARXIS SOC SYSTEM 🛡️           ║"
+echo "║          🛡️  ARCEUX SOC SYSTEM 🛡️          ║"
 echo "║                                           ║"
 echo "║  Starting all components...               ║"
 echo "║                                           ║"
@@ -27,7 +27,7 @@ echo "   ✅ Log Generator started (PID: $GEN_PID)"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🎉 Arxis SOC is running!"
+echo "🎉 Arceux SOC is running!"
 echo ""
 echo "📡 API Server:     http://localhost:8000"
 echo "📊 Metrics:        http://localhost:8000/metrics"

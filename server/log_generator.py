@@ -1,5 +1,5 @@
 """
-Synthetic Log Generator for Arxis SOC POC
+Synthetic Log Generator for Arceux SOC POC
 
 Generates realistic security event logs to simulate a live SOC environment.
 Emits events every 1-3 seconds with randomized but believable patterns.
@@ -118,7 +118,7 @@ def send_log(log: Dict[str, Any]) -> bool:
 
 def run_generator():
     """Main loop: generate and send logs continuously."""
-    print("🔥 Arxis Log Generator Started")
+    print("🔥 Arceux Log Generator Started")
     print(f"📡 Sending logs to: {INGESTION_URL}")
     print(f"⏱️  Interval: {EVENT_INTERVAL[0]}-{EVENT_INTERVAL[1]}s\n")
     

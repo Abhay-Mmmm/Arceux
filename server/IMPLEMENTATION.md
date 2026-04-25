@@ -1,4 +1,4 @@
-# Arxis Backend Implementation Plan
+# Arceux Backend Implementation Plan
 
 ## ✅ Completed Components
 
@@ -182,7 +182,7 @@ python log_generator.py   # Terminal 2
 ### Demo Script (5 min)
 
 #### Part 1: Show System Running (1 min)
-- **Narrator**: "This is Arxis, an AI-native SOC platform."
+- **Narrator**: "This is Arceux, an AI-native SOC platform."
 - **Action**: Show log generator output
 - **Point**: "Real-time security events streaming in"
 
@@ -212,7 +212,7 @@ python log_generator.py   # Terminal 2
 ### Key Talking Points
 1. **"This is not alerting, this is reasoning"**
    - Traditional: Rules → Alert
-   - Arxis: Rules → Multi-agent reasoning → Explained alert
+   - Arceux: Rules → Multi-agent reasoning → Explained alert
 
 2. **"Each alert is a mini SOC team"**
    - 5 agents = roles in a real SOC
