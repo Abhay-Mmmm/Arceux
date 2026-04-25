@@ -1,0 +1,20 @@
+# Core Framework
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+
+# AI Agents
+crewai
+crewai[litellm]
+litellm
+langchain
+langchain-groq
+groq
+
+# Utilities
+requests
+aiohttp
+
+# Development
+pytest

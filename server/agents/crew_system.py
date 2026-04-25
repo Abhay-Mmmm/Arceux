@@ -17,25 +17,24 @@ from models import DetectionSignal
 groq_llm = None
 
 try:
-    from langchain_groq import ChatGroq
+    from crewai import LLM
 
     _api_key = os.getenv("GROQ_API_KEY")
     _model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
     if _api_key:
-        groq_llm = ChatGroq(
-            model=_model,
-            groq_api_key=_api_key,
+        groq_llm = LLM(
+            model=f"groq/{_model}",
+            api_key=_api_key,
             temperature=0.1,
         )
-        print(f"Groq LLM for CrewAI initialised ({_model})")
+        print(f"Groq LLM for CrewAI initialised (groq/{_model})")
     else:
         print("GROQ_API_KEY not set — CrewAI agents will use fallback trace")
 except ImportError:
-    print("langchain-groq not installed — CrewAI agents will use fallback trace")
+    print("crewai LLM not available — CrewAI agents will use fallback trace")
 except Exception as e:
     print(f"Groq LLM init error: {e} — CrewAI agents will use fallback trace")
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1️⃣ Orchestrator Agent (The Coordinator)
