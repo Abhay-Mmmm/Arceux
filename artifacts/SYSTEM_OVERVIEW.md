@@ -1,227 +1,194 @@
-# 🎯 Arceux SOC - System Overview
+# Arceux SOC — System Overview
 
-## Architecture Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         FRONTEND                                 │
-│                    (React + TypeScript)                          │
-│                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │  Dashboard   │  │   Alerts     │  │   Agents     │         │
-│  │              │  │              │  │              │         │
-│  │ • Heartbeat  │  │ • AI Trace   │  │ • 5 Agents   │         │
-│  │ • Metrics    │  │ • Actions    │  │ • Details    │         │
-│  │ • Chat       │  │ • Timeline   │  │ • Reasoning  │         │
-│  └──────────────┘  └──────────────┘  └──────────────┘         │
-│                                                                  │
-│                  Polls every 2s ↓                               │
-└─────────────────────────────────────────────────────────────────┘
-                                 │
-                                 │ HTTP / WebSocket
-                                 ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                         BACKEND                                  │
-│                    (FastAPI + Python)                            │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                    main.py (Orchestrator)                 │  │
-│  │  Starts all components in parallel threads                │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                 │                                │
-│        ┌────────────────────────┼────────────────────────┐      │
-│        ↓                        ↓                        ↓      │
-│  ┌────────────┐         ┌──────────────┐        ┌─────────────┐│
-│  │    Log     │ 1-3s    │     API      │        │   Agent     ││
-│  │ Generator  │────────▶│   Server     │◀──────▶│ Processing  ││
-│  │            │  POST   │              │ async  │  (CrewAI)   ││
-│  │ • Users    │  /logs  │ • Ingestion  │        │             ││
-│  │ • Events   │         │ • Detection  │        │ 5 AI Agents ││
-│  │ • Random   │         │ • Storage    │        │ • Analyze   ││
-│  │ • Patterns │         │ • Endpoints  │        │ • Explain   ││
-│  └────────────┘         └──────────────┘        └─────────────┘│
-│                                 │                                │
-│                                 ↓                                │
-│                         ┌──────────────┐                         │
-│                         │   Storage    │                         │
-│                         │  (In-Memory) │                         │
-│                         │              │                         │
-│                         │ • Logs       │                         │
-│                         │ • Signals    │                         │
-│                         │ • Alerts     │                         │
-│                         └──────────────┘                         │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Data Flow
-
-### 1. Log Generation → Detection
-```
-Log Generator
-    → POST /logs
-        → Validation
-            → Storage.add_log()
-                → Detection Engine
-                    → If threat detected: create Signal
-                        → Storage.add_signal()
-```
-
-### 2. Signal → AI Analysis
-```
-Background Task (every 5s)
-    → Get pending signals
-        → For each signal:
-            → CrewAI Agent System
-                → Ingestion Agent (normalize)
-                → Threat Analyst (classify)
-                → Context Agent (enrich)
-                → Explanation Agent (summarize)
-                → SOC Manager (prioritize)
-            → Create Alert
-                → Storage.add_alert()
-```
-
-### 3. Frontend → Real-time Updates
-```
-Dashboard Component
-    → useEffect (every 2s)
-        → GET /metrics/realtime
-            → Compute from actual logs/alerts/signals
-                → Return component data + history
-                    → Generate dynamic SVG heartbeat
-                        → Display in UI
-```
-
-## Component Descriptions
-
-### Backend Components
-
-**main.py** - Orchestration
-- Starts API server in thread
-- Starts log generator in thread
-- Handles graceful shutdown
-- Single entry point
-
-**api.py** - FastAPI Server
-- `/logs` - Ingest security events
-- `/alerts` - Get AI-analyzed alerts
-- `/metrics` - System metrics
-- `/metrics/realtime` - Live component data
-- `/health` - Health check
-- Background task for agent processing
-
-**log_generator.py** - Synthetic Events
-- Generates realistic security events
-- 6 users, 6 assets, multiple event types
-- Weighted distribution (mostly benign)
-- Sends to `/logs` every 1-3 seconds
-
-**detection_engine.py** - Rule-based Detection
-- Brute force detection (5+ failures)
-- Suspicious login (new country)
-- Insider threat (privilege + data)
-- Creates signals for agent analysis
-
-**agents/crew_system.py** - CrewAI Multi-Agent
-- 5 specialized AI agents
-- Sequential processing
-- Generates human-readable explanations
-- Powered by OpenAI GPT-4
-
-**storage.py** - In-Memory Database
-- Logs, signals, alerts storage
-- Query methods
-- Metrics calculation
-
-### Frontend Components
-
-**Dashboard.tsx** - Main View
-- System heartbeat with live data
-- AI analyst chat
-- Alert feed
-- Performance metrics
-- Compliance status
-
-**Modal.tsx** - Reusable Dialog
-- Alert details with AI trace
-- Service diagnostics
-- System check progress
-
-**HeartbeatLine** - Dynamic SVG
-- Generates waveform from history array
-- Real-time animation
-- Color-coded by status
-
-**api.ts** - Backend Integration
-- fetchRealtimeMetrics (polling)
-- fetchAlerts
-- fetchMetrics
-- Type-safe interfaces
-
-## Key Features
-
-### Real-time Integration
-✅ Logs generated every 1-3 seconds
-✅ Detection happens immediately
-✅ AI agents process in background
-✅ Dashboard polls every 2 seconds
-✅ Heartbeat reflects actual activity
-
-### AI-Powered Analysis
-✅ Multi-agent reasoning (5 agents)
-✅ Human-readable explanations
-✅ MITRE ATT&CK mapping
-✅ Contextual enrichment
-✅ Priority recommendations
-
-### User Experience
-✅ Single-command startup (main.py)
-✅ Live system monitoring
-✅ Interactive components
-✅ Beautiful visualizations
-✅ Real-world simulation
-
-## Technology Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18, TypeScript, Vite |
-| Styling | TailwindCSS |
-| Charts | Recharts |
-| Icons | Lucide React |
-| Backend | FastAPI, Python 3.11 |
-| AI | CrewAI + OpenAI GPT-4 |
-| Storage | In-memory (SQLite-ready) |
-| HTTP | Uvicorn, CORS enabled |
-
-## Performance Metrics
-
-- **Log Generation**: 1-3 seconds/event
-- **Detection**: <10ms per log
-- **AI Analysis**: 15-30 seconds per signal
-- **API Response**: <50ms average
-- **Frontend Poll**: Every 2 seconds
-- **Heartbeat Update**: Real-time (smooth)
-
-## Next Steps
-
-To run the complete system:
-
-To run the complete system:
-
-```bash
-# Terminal 1: Server (Backend)
-cd server
-conda activate lokam
-python main.py
-
-# Terminal 2: Client (Frontend)
-cd client
-npm run dev
-```
-
-Then open: **http://localhost:5173**
+**Version:** 0.4 | **Last Updated:** 2026-04-25
 
 ---
 
-**The Arceux SOC is now a complete, real-time, AI-powered security operations center!** 🛡️
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                          FRONTEND                                 │
+│                   (React 18 + TypeScript + Vite)                 │
+│                                                                   │
+│  ┌─────────────┐   ┌─────────────┐   ┌──────────────────────┐  │
+│  │  Dashboard  │   │   Alerts    │   │   Agent Insights      │  │
+│  │             │   │             │   │                       │  │
+│  │ • Heartbeat │   │ • Table     │   │ • 6-Agent Pipeline    │  │
+│  │ • AI Chat   │   │ • Filters   │   │ • Live Status Dots    │  │
+│  │ • Metrics   │   │ • Ownership │   │ • Run Pipeline Btn    │  │
+│  │ • Alerts    │   │ • Execute   │   │ • Per-Agent Trace     │  │
+│  └─────────────┘   └─────────────┘   └──────────────────────┘  │
+│                                                                   │
+│    polls /metrics/realtime  polls /alerts    polls /agents/status │
+│           every 2s             every 5s           every 3s       │
+└──────────────────────────────────────────────────────────────────┘
+                               │ HTTP REST
+                               ↓
+┌──────────────────────────────────────────────────────────────────┐
+│                       BACKEND (FastAPI)                           │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │          Background Signal Processor (every 5s)            │  │
+│  │  Polls storage.get_pending_signals() → run_agent_analysis  │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│          │                                          │             │
+│  ┌───────┴──────┐                       ┌──────────┴──────────┐  │
+│  │ Log Generator│  POST /logs           │  CrewAI 6-Agent     │  │
+│  │  (1–3s loop) │──────────────────────▶│  System (Groq LLM)  │  │
+│  └──────────────┘                       │                     │  │
+│                                         │ 1. Orchestrator     │  │
+│  ┌───────────────┐                      │ 2. Alert Handler    │  │
+│  │ Detection     │ DetectionSignal      │ 3. Threat Analyzer  │  │
+│  │ Engine        │─────────────────────▶│ 4. Root Cause       │  │
+│  │ (3 rules)     │                      │ 5. Compliance       │  │
+│  └───────────────┘                      │ 6. Response Auto.   │  │
+│                                         └─────────────────────┘  │
+│                               │                                   │
+│                               ↓                                   │
+│                    ┌─────────────────────┐                        │
+│                    │   ArceuxStorage      │                        │
+│                    │                      │                        │
+│                    │ • logs (last 1000)   │                        │
+│                    │ • signals            │                        │
+│                    │ • alerts (+ JSON)    │                        │
+│                    │ • executed_actions   │                        │
+│                    │ • blocked_ips (Set)  │                        │
+│                    │ • flagged_users (Set)│                        │
+│                    │ • agent_states (6)   │                        │
+│                    └─────────────────────┘                        │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Data Flow
+
+### Log → Alert (Full Pipeline)
+
+```
+Log Generator
+    → POST /logs
+        → storage.add_log()
+        → detection_engine.analyze(log)
+            → If threat detected:
+                → storage.add_signal(signal)
+
+Background processor (every 5s)
+    → storage.get_pending_signals()
+        → For each signal:
+            → storage.update_agent_state(all, "running")
+            → crew.kickoff()   [Groq LLM]
+            → storage.update_agent_state(all, "completed", trace)
+            → storage.add_alert(alert)
+            → storage.mark_signal_processed(signal_id)
+
+Frontend
+    → GET /alerts  (every 5s on Dashboard, polling on Alerts page)
+    → GET /agents/status  (every 3s on Agent Insights)
+```
+
+### Execute Action Flow
+
+```
+Frontend "Block IP" button
+    → POST /actions/execute  { action_type: "block_ip", alert_id }
+        → storage.blocked_ips.add(alert_ip)
+        → storage.add_alert_note(alert_id, note)
+        → storage.add_executed_action(action)
+        → returns { success, message }
+```
+
+### Agent Trigger Flow
+
+```
+Frontend "Run on Latest Alert" button
+    → POST /agents/trigger
+        → Creates synthetic DetectionSignal from latest alert
+        → storage.add_signal(synthetic)
+        → Background processor picks it up within 5s
+```
+
+---
+
+## File Map
+
+```
+Arceux/
+├── client/                         # React frontend
+│   └── src/
+│       ├── pages/
+│       │   ├── Dashboard.tsx       # Heartbeat, AI chat, alert feed, metrics
+│       │   ├── Alerts.tsx          # Alert table, take ownership, execute actions
+│       │   └── AgentInsights.tsx   # Live 6-agent pipeline, trigger button
+│       ├── components/
+│       │   ├── Layout.tsx          # Sidebar navigation
+│       │   └── ui/                 # Badge, Button, Card, Modal
+│       ├── services/api.ts         # All API calls + type-safe interfaces
+│       ├── data/mock.ts            # Offline fallback data
+│       └── types.ts                # TypeScript interfaces
+│
+├── server/                         # Python FastAPI backend
+│   ├── api.py                      # All REST endpoints + background processor
+│   ├── main.py                     # Entry point — starts all threads
+│   ├── chatbot.py                  # Groq chatbot + template fallback
+│   ├── detection_engine.py         # 3 stateful rule-based detectors
+│   ├── storage.py                  # Thread-safe in-memory store
+│   ├── models.py                   # Pydantic data models
+│   ├── log_generator.py            # Synthetic log producer
+│   ├── agents/
+│   │   └── crew_system.py          # 6-agent CrewAI pipeline + state tracking
+│   ├── requirements.txt
+│   ├── .env / .env.example
+│   └── data/alerts.json            # Persisted alerts (auto-generated)
+│
+└── artifacts/                      # Project documentation (you are here)
+    ├── PRD.md                      # Product requirements
+    ├── SYSTEM_OVERVIEW.md          # Architecture (this file)
+    ├── START.md                    # Startup guide
+    ├── API_REFERENCE.md            # Complete API docs
+    └── IMPLEMENTATION.md           # Detailed implementation notes
+```
+
+---
+
+## Detection Rules
+
+| Rule | Trigger Condition | Severity | Stateful? |
+|------|-----------------|----------|-----------|
+| BRUTE_FORCE | >5 failed logins within 2 min per user, tracks unique source IPs | HIGH | Yes — sliding window per user |
+| SUSPICIOUS_LOGIN | Login from: Russia, North Korea, Iran, China, Venezuela, Tor Exit Node | HIGH | No |
+| INSIDER_THREAT | Privilege escalation followed by data download, correlated per user | CRITICAL | Yes — tracks per-user sequence |
+
+---
+
+## Agent State Machine
+
+Each of the 6 agents transitions through these states, tracked in `storage.agent_states`:
+
+```
+idle → running → completed
+               ↘ error
+```
+
+State fields per agent:
+- `status`: idle | running | completed | error
+- `last_run`: ISO timestamp of most recent execution
+- `tasks_completed`: cumulative count
+- `execution_count`: total pipeline runs
+- `total_execution_time_ms`: for avg calculation
+- `last_execution_trace`: up to 8 lines from last crew result
+
+---
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Groq (`llama-3.3-70b-versatile`) | Free tier, fast inference, strong reasoning; easy to swap |
+| Template fallback for all LLM calls | System remains fully functional without any API key |
+| Sequential CrewAI pipeline | Each agent builds on previous analysis, mirrors real SOC workflow |
+| In-memory + JSON persistence | Simple for POC; alerts survive backend restarts |
+| HTTP polling instead of WebSocket | Simpler architecture; structure is WebSocket-ready |
+| `blocked_ips` and `flagged_users` as Sets | Thread-safe, deduplicating, O(1) lookup |
+| `localModifications` in Alerts.tsx | Optimistic UI — status changes persist across poll cycles even before backend confirms |

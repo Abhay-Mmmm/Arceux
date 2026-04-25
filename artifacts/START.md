@@ -1,135 +1,161 @@
-# 🚀 Arceux SOC - Complete System Startup Guide
+# Arceux SOC — Startup Guide
 
-## Quick Start (2 Steps)
+**Last Updated:** 2026-04-25
 
-### 1. Start Server (Backend)
+---
+
+## Prerequisites
+
+- Python 3.11+
+- Node.js 18+
+- Groq API key — free at [console.groq.com](https://console.groq.com) *(optional — system works without it using template fallback)*
+
+---
+
+## 1. Backend Setup (first time only)
 
 ```bash
 cd server
-conda activate lokam  # or your Python environment
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+```
+
+Edit `server/.env` and fill in your Groq key:
+```
+GROQ_API_KEY=your-key-here
+GROQ_MODEL=llama-3.3-70b-versatile
+```
+
+---
+
+## 2. Start the Backend
+
+```bash
+cd server
 python main.py
 ```
 
-This single command starts:
-- ✅ FastAPI server with AI agents (port 8000)
-- ✅ Synthetic log generator (1-3s intervals)
-- ✅ Real-time threat detection
-- ✅ Background CrewAI processing
+This single command starts everything:
+- FastAPI server on **port 8000**
+- Synthetic log generator (1–3 second intervals)
+- Background CrewAI 6-agent processor (polls every 5s)
+- Real-time threat detection engine
 
-### 2. Start Client (Frontend)
+You'll see output like:
+```
+Background signal processor started
+Log generator started
+Uvicorn running on http://0.0.0.0:8000
+```
+
+---
+
+## 3. Start the Frontend
 
 ```bash
-# In a new terminal, from the root directory
 cd client
+npm install   # first time only
 npm run dev
 ```
 
-Open: **http://localhost:5173**
+Open: **[http://localhost:5173](http://localhost:5173)**
 
 ---
 
-## What You'll See
+## 4. Verify Everything Is Working
 
-### Backend Terminal
-- 🔥 Log generation (user events, logins, etc.)
-- 🚨 Real-time detections (brute force, suspicious logins)
-- 🤖 AI agent analysis (when threats are detected)
-- ✅ Alert creation with AI explanations
+```bash
+# API health check
+curl http://localhost:8000/health
+# → {"status":"healthy","service":"arceux-soc-backend",...}
 
-### Frontend Dashboard
-- 📊 System Heartbeat (real-time metrics from backend)
-- 🚨 Live alerts with AI-generated explanations
-- 💬 AI Analyst chat interface
-- 📈 Threat distribution charts
+# Check alerts after ~2 minutes
+curl http://localhost:8000/alerts | python -m json.tool
 
----
+# Check live agent status
+curl http://localhost:8000/agents/status | python -m json.tool
 
-## Stopping the System
-
-**Backend:** Press `Ctrl+C` in the backend terminal
-- All components shut down gracefully
-
-**Frontend:** Press `Ctrl+C` in the frontend terminal
+# Check detection signals
+curl http://localhost:8000/debug/signals
+```
 
 ---
 
-## Endpoints
+## Useful URLs
 
-Once running, you can access:
-
-| Service | URL | Description |
-|---------|-----|-------------|
-| Frontend | http://localhost:5173 | Main dashboard |
-| API Docs | http://localhost:8000/docs | Interactive API documentation |
-| Alerts | http://localhost:8000/alerts | List all AI-analyzed alerts |
-| Metrics | http://localhost:8000/metrics | System metrics |
-| Real-time | http://localhost:8000/metrics/realtime | Live component data |
-| Health | http://localhost:8000/health | API health check |
+| URL | Description |
+|-----|-------------|
+| http://localhost:5173 | Frontend dashboard |
+| http://localhost:8000/docs | Interactive API docs (Swagger UI) |
+| http://localhost:8000/alerts | All AI-analyzed alerts (JSON) |
+| http://localhost:8000/agents/status | Live agent pipeline state |
+| http://localhost:8000/metrics | System metrics summary |
+| http://localhost:8000/metrics/realtime | Component health + latency history |
+| http://localhost:8000/debug/signals | Detection signals (debug) |
+| http://localhost:8000/debug/logs | Recent ingested logs (debug) |
 
 ---
 
-## Requirements
+## What to Expect
 
-### Backend
-- Python 3.11+
-- OpenAI API key (set in `backend/.env`)
-- Dependencies: `pip install -r backend/requirements.txt`
+| Time from startup | Event |
+|-------------------|-------|
+| 0–30s | Logs start appearing in backend terminal |
+| 1–2 min | First detection signal fires (brute force or suspicious login) |
+| +5–30s | Agent pipeline runs; alert created and visible in frontend |
+| Ongoing | New alerts every few minutes as patterns repeat |
 
-### Frontend
-- Node.js 18+
-- Dependencies: `npm install`
+Detection patterns that trigger alerts:
+- **Brute Force**: Same user logs 6+ failed logins within 2 minutes
+- **Suspicious Login**: Login from Russia, North Korea, Iran, Tor Exit Node, etc.
+- **Insider Threat**: Same user does PRIVILEGE_ESCALATION then FILE_TRANSFER/DATA_ACCESS
+
+---
+
+## Stopping
+
+Press `Ctrl+C` in the backend terminal. All threads (API server + log generator) shut down gracefully.
 
 ---
 
 ## Troubleshooting
 
-### Backend won't start
+**"No module named crewai" or similar**
 ```bash
-# Check Python environment
-conda activate lokam
-which python
-
-# Verify dependencies
-pip install -r backend/requirements.txt
-
-# Check OpenAI key
-cat backend/.env
+pip install -r requirements.txt
 ```
 
-### Frontend won't connect to backend
+**No alerts appearing after 3+ minutes**
 ```bash
-# Verify backend is running
+# Check if signals are being detected
+curl http://localhost:8000/debug/signals
+# If "pending" count is > 0, agents are still processing (wait 30s)
+# If 0, wait longer for detection patterns to form
+```
+
+**Frontend shows blank / can't reach backend**
+```bash
 curl http://localhost:8000/health
-
-# Check CORS settings in backend/api.py
-# Should allow origin: http://localhost:5173
+# If this fails, the backend isn't running — start it first
 ```
 
-### No alerts appearing
-- Wait 2-3 minutes for first detection
-- Logs generate every 1-3 seconds
-- Detection patterns trigger randomly
-- AI processing takes 15-30 seconds per alert
+**Groq API errors in backend logs**
+System falls back to template responses automatically. AI features still work — just without live LLM reasoning. Check `GROQ_API_KEY` in `server/.env`.
+
+**To clear all data and start fresh:**
+```bash
+curl -X POST http://localhost:8000/debug/clear
+```
 
 ---
 
 ## Demo Tips
 
-To see the system in action:
-
-1. **Watch the backend terminal** for detection events
-2. **Refresh the dashboard** to see new alerts
-3. **Click on alerts** to see AI explanations and agent trace
-4. **Click on services** in System Heartbeat to see diagnostics
-5. **Use the "System Check"** button to verify all components
-6. **Type in the AI Analyst** chat to simulate commands
-
-The system generates realistic security events and demonstrates:
-- Real-time log processing
-- Multi-agent AI threat analysis
-- Human-readable security explanations
-- Live system monitoring
-
----
-
-**You're ready to experience the Arceux SOC!** 🛡️
+1. **Watch the backend terminal** — detections print in real time
+2. **Agent Insights page** — click "Run on Latest Alert" to manually trigger the pipeline and watch agents go idle → running → completed
+3. **Alerts page** — click any alert to see the full 6-agent reasoning trace
+4. **Dashboard chat** — ask "What's the latest threat?" or click quick-action buttons

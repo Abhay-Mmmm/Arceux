@@ -36,13 +36,13 @@ Arceux/
 ├── server/                        # Python FastAPI backend
 │   ├── api.py                     # All API endpoints
 │   ├── main.py                    # Orchestrator/entry point
-│   ├── chatbot.py                 # Gemini chatbot + template fallback
-│   ├── agents/crew_system.py      # CrewAI 6-agent system (Gemini LLM)
+│   ├── chatbot.py                 # Groq chatbot + template fallback
+│   ├── agents/crew_system.py      # CrewAI 6-agent system (Groq LLM)
 │   ├── detection_engine.py        # Rule-based threat detection
 │   ├── storage.py                 # Thread-safe in-memory store
 │   ├── models.py                  # Pydantic data models
 │   └── log_generator.py           # Synthetic log generator
-└── artifacts/                     # Design docs and fix notes
+└── artifacts/                     # Design docs and implementation notes
 ```
 
 ---
@@ -83,6 +83,8 @@ Arceux/
 - `fetchAlerts()`, `fetchAlertById()`, `fetchMetrics()`, `fetchRealtimeMetrics()`, `checkHealth()`, `ingestLog()`.
 - `updateAlertStatus(alertId, status)` — calls `PATCH /alerts/{id}/status`.
 - `executeAction({ action_type, alert_id, parameters })` — calls `POST /actions/execute`.
+- `fetchAgentStatus()` — calls `GET /agents/status`.
+- `triggerAgentPipeline()` — calls `POST /agents/trigger`.
 - Alert transformation: maps backend schema → frontend format, uses backend `status` field.
 - `useAlerts()` React hook: polling with configurable interval, loading/error/refetch states.
 
@@ -104,10 +106,15 @@ Arceux/
 | `GET /alerts/{id}` | ✅ Single alert by ID |
 | `PATCH /alerts/{id}/status` | ✅ Update alert status (open/investigating/resolved) |
 | `POST /actions/execute` | ✅ Execute response action (block_ip, reset_credentials) |
+| `GET /agents/status` | ✅ All 6 agent states with stats |
+| `POST /agents/trigger` | ✅ Queue pipeline run from latest alert |
 | `GET /metrics` | ✅ Summary (totals, by-severity, recent activity) |
 | `GET /metrics/realtime` | ✅ Component health + latency history (6 components) |
-| `POST /chat` | ✅ Free-form or quick-action chat (Gemini + template fallback) |
+| `POST /chat` | ✅ Free-form or quick-action chat (Groq + template fallback) |
 | `GET /health` | ✅ Basic health check |
+| `GET /debug/logs` | ✅ Recent ingested logs |
+| `GET /debug/signals` | ✅ Detection signals + processed status |
+| `POST /debug/clear` | ✅ Clear all storage |
 
 #### Detection Engine (`server/detection_engine.py`)
 Three rule-based detectors, all stateful:
@@ -120,12 +127,12 @@ Sequential agent pipeline powered by Groq (`llama-3.3-70b-versatile` via `langch
 
 | # | Agent | Role |
 |---|-------|------|
-| 1 | Orchestrator | Coordinates incident response lifecycle |
-| 2 | Alert Handler | Triages and correlates events |
-| 3 | Threat Analyzer | MITRE ATT&CK mapping + intent classification |
+| 1 | Orchestrator Agent | Coordinates incident response lifecycle |
+| 2 | Alert Handler Agent | Triages and correlates events |
+| 3 | Threat Analyzer Agent | MITRE ATT&CK mapping + intent classification |
 | 4 | Root Cause Agent | Forensic timeline reconstruction |
 | 5 | Compliance Agent | GDPR/IRDAI regulatory evaluation |
-| 6 | Response Automation | Remediation planning |
+| 6 | Response Automation Agent | Remediation planning |
 
 - All agents receive `llm=groq_llm` when `GROQ_API_KEY` is set; fall back to simulated trace otherwise.
 - `run_agent_analysis` updates `storage.agent_states` throughout execution: sets all agents to `running` at start, `completed` (with elapsed ms and trace) on success, `error` on failure.
@@ -240,6 +247,6 @@ VITE_API_URL=http://localhost:8000   # Override backend URL
 
 ## Overall Assessment
 
-The core pipeline — log ingestion → rule-based detection → CrewAI agent analysis (Gemini) → alert creation → frontend visualization — is fully functional end-to-end. Alert status changes now persist to the backend. Execute buttons on recommended actions trigger real backend handlers. The chatbot uses live Gemini calls when a key is configured, falling back to data-driven templates when not. The UI is polished, dark-themed, and animated.
+The core pipeline — log ingestion → rule-based detection → CrewAI agent analysis (Groq) → alert creation → frontend visualization — is fully functional end-to-end. Alert status changes persist to the backend. Execute buttons on recommended actions trigger real backend handlers that populate `blocked_ips` and `flagged_users` sets. The chatbot uses live Groq calls when a key is configured, falling back to data-driven templates when not. The Agent Insights page polls live agent state and supports manual pipeline triggering. The UI is polished, dark-themed, and animated.
 
 Remaining gaps before production-grade use: a real database, authentication, SIEM connectors, and WebSocket real-time push.

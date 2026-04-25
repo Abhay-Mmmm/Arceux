@@ -1,322 +1,156 @@
+# Arceux SOC — Product Requirements Document
 
-# Arceux SOC – Proof of Concept (POC) PRD
-
-## Version
-0.2 (POC / Demo with CrewAI Agents)
-
-## Objective
-Build a lightweight, fast POC of the Arceux SOC platform that demonstrates:
-- Live synthetic log ingestion
-- Real-time alert detection
-- Multi-agent AI reasoning using CrewAI
-- Human-readable explanations
-- Analyst-facing dashboard
-
-The goal is to **visually and conceptually demonstrate an agentic SOC**, not to build a full SIEM.
+**Version:** 0.4 (POC — AI-Native SOC with Groq + Full Interactive UI)
+**Status:** Active Development — Early Prototype
+**Last Updated:** 2026-04-25
 
 ---
 
-## Success Criteria (POC)
+## Objective
+
+Build a demonstrable proof-of-concept of the Arceux SOC platform that showcases:
+- Live synthetic log ingestion → real-time rule-based threat detection
+- Multi-agent AI reasoning pipeline (CrewAI + Groq)
+- An AI chatbot analyst powered by Groq
+- An analyst-facing dashboard with alerts, agent insights, and live system metrics
+
+The goal is to **visually and conceptually demonstrate an agentic SOC**, not to build a production SIEM.
+
+---
+
+## Success Criteria
+
 - Logs flow end-to-end in real time
-- Alerts are produced and explained by agents
-- Clear separation of responsibilities between agents
-- Entire system runs locally
-- Demo can be explained in under 5 minutes
+- Alerts produced and explained by 6 specialized AI agents
+- Alert status changes (open → investigating → resolved) persist to the backend
+- AI chatbot answers live questions about the current threat landscape
+- Agent Insights page shows live pipeline status and per-agent execution traces
+- Analysts can execute actions (block IP, reset credentials) that persist to storage
+- Entire system runs locally; demo explainable in under 5 minutes
 
 ---
 
 ## Non-Goals (Explicitly Out of Scope)
-- No Kafka, Flink, or GPU usage
-- No real ML model training
-- No compliance submission
-- No enterprise-scale performance
+
+- No Kafka, Flink, or stream processing infrastructure
+- No real ML model training or statistical anomaly detection
+- No compliance submission or regulatory reporting automation
+- No enterprise-scale performance or horizontal scaling
+- No authentication, RBAC, or multi-tenancy
 
 ---
 
-## High-Level Architecture (POC)
+## Tech Stack
 
-```mermaid
-graph TD
-    A[Synthetic Log Generator] --> B[Ingestion API]
-    B --> C[Detection Engine]
-    C --> D[CrewAI Agent System]
-    D --> E[Alert Store]
-    E --> F[Frontend Dashboard]
-```
+| Layer | Technology |
+|-------|------------|
+| Frontend | React 18 + TypeScript + Vite |
+| Styling | TailwindCSS 3.4 + Framer Motion |
+| Charts | Recharts 2.9 |
+| Routing | React Router DOM 6.18 |
+| Backend | FastAPI + Uvicorn (Python 3.11+) |
+| AI Chatbot | Groq API (`groq` SDK, `llama-3.3-70b-versatile`) |
+| AI Agents | CrewAI + LangChain + `langchain-groq` |
+| Storage | In-memory + JSON file persistence |
+| Async | Python asyncio + threading |
 
 ---
 
 ## Core Components
 
-### 1. Synthetic Log Generator
+### 1. Synthetic Log Generator (`server/log_generator.py`)
+- Emits realistic security events every 1–3 seconds via `POST /logs`
+- 6 users, 6 asset types, 5 event types with weighted distribution
+- Higher probability of suspicious locations on suspicious event types
 
-**Purpose**
-Simulate realistic SOC telemetry.
+### 2. Detection Engine (`server/detection_engine.py`)
+Three rule-based stateful detectors:
 
-**Implementation**
-- Python script (`log_generator.py`)
-- Emits JSON logs every 1–3 seconds
+| Rule | Trigger | Severity |
+|------|---------|----------|
+| BRUTE_FORCE | >5 failed logins in a 2-min sliding window per user | HIGH |
+| SUSPICIOUS_LOGIN | Login from high-risk location (Russia, North Korea, Tor, Iran, etc.) | HIGH |
+| INSIDER_THREAT | Privilege escalation followed by data download (per user) | CRITICAL |
 
-**Log Types**
-- Successful login
-- Failed login
-- Privilege escalation
-- Data download
-- Login from new geography
+### 3. 6-Agent CrewAI System (`server/agents/crew_system.py`)
+Sequential pipeline powered by Groq (`llama-3.3-70b-versatile` via `langchain-groq`):
 
-**Example Log**
-```json
-{
-  "timestamp": "2026-01-20T12:01:22Z",
-  "user": "john.doe@company.com",
-  "event_type": "failed_login",
-  "ip": "91.203.12.4",
-  "location": "Russia",
-  "asset": "customer-db"
-}
-```
+| # | Agent | Role |
+|---|-------|------|
+| 1 | Orchestrator Agent | Incident Commander — coordinates response lifecycle |
+| 2 | Alert Handler Agent | Tier-1 triage and event correlation |
+| 3 | Threat Analyzer Agent | MITRE ATT&CK mapping + attacker intent classification |
+| 4 | Root Cause Agent | Forensic timeline reconstruction + blast radius |
+| 5 | Compliance Agent | GDPR / IRDAI / SOC 2 regulatory evaluation |
+| 6 | Response Automation Agent | Containment and remediation planning |
 
----
+Falls back to simulated trace if `GROQ_API_KEY` is not set. Updates `storage.agent_states` throughout execution (idle → running → completed/error).
 
-### 2. Ingestion API
+### 4. AI Chatbot (`server/chatbot.py`)
+- Uses Groq API as "senior SOC analyst with deep threat intelligence expertise"
+- Context injection: last 5 alerts as JSON + alert stats in every prompt
+- Quick actions: `explain_last`, `threat_summary`, `recommend_actions`, `system_status`
+- Template fallback when `GROQ_API_KEY` is absent
 
-**Purpose**
-Accept logs and push them into the system.
+### 5. Backend API (`server/api.py`)
+See `API_REFERENCE.md` for the complete endpoint list.
 
-**Implementation**
-- FastAPI (`ingestion_service.py`)
-- Endpoint: `POST /logs`
+### 6. Storage (`server/storage.py`)
+- Thread-safe in-memory storage with JSON persistence (alerts survive restart)
+- Tracks: `blocked_ips` (Set), `flagged_users` (Set), `agent_states` (per-agent dict)
 
-**Responsibilities**
-- Validate log schema
-- Forward logs to detection engine
+### 7. Frontend — Three Pages
 
----
+**Dashboard (`client/src/pages/Dashboard.tsx`)**
+- SVG heartbeat waveform for 6 system components (2s polling)
+- AI Analyst chat panel (Groq-powered, 4 quick-action buttons)
+- Live high/critical alert feed (5s polling)
+- Threat severity chart + compliance status badges
 
-### 3. Detection Engine (Rules-Based)
+**Alerts (`client/src/pages/Alerts.tsx`)**
+- Sortable/filterable alert table with real-time search
+- Take Ownership → `PATCH /alerts/{id}/status` (optimistic UI)
+- Execute Actions → `POST /actions/execute` (block IP, reset credentials)
+- Slide-out detail panel with full AI agent trace
 
-**Purpose**
-Simulate threat detection logic before agents reason.
-
-**Implementation**
-- Python module (`detection_engine.py`)
-- Stateless rule evaluation
-
-**Minimum Rules**
-- `BRUTE_FORCE`: > 5 failed logins in 2 minutes
-- `SUSPICIOUS_LOGIN`: Login from unseen country
-- `INSIDER_THREAT`: Privilege escalation + data access
-
-**Output**
-```json
-{
-  "signal_type": "SUSPICIOUS_LOGIN",
-  "user": "john.doe@company.com",
-  "severity": "HIGH",
-  "events": [...]
-}
-```
-
-This output becomes **input to the CrewAI system**.
-
----
-
-### 4. CrewAI Agent System (Core of the POC)
-
-#### Overview
-The SOC logic is modeled as **5 collaborating AI agents** using CrewAI. Each agent has a **single responsibility**, mimicking a real SOC workflow.
-
----
-
-#### Agent 1: Ingestion Analyst Agent
-- **Role**: Understands raw security signals.
-- **Responsibilities**:
-  - Review detection output
-  - Confirm the signal is meaningful
-  - Normalize alert context
-- **Input**: Detection signal, raw events
-- **Output**: Structured alert context
-
----
-
-#### Agent 2: Threat Analyst Agent
-- **Role**: Determine *what kind of threat this is*.
-- **Responsibilities**:
-  - Classify the alert (Credential Abuse, Insider Threat, etc.)
-  - Assess severity justification
-  - Identify suspicious patterns
-- **Output**:
-  ```json
-  {
-    "threat_type": "Credential Compromise",
-    "confidence": "High"
-  }
-  ```
-
----
-
-#### Agent 3: Context Enrichment Agent
-- **Role**: Adds human-level context.
-- **Responsibilities**:
-  - Check historical behavior (synthetic)
-  - Identify “first-time” actions
-  - Add business-style reasoning
-- **Example**:
-  - “User has never logged in from this country before”
-  - “Asset accessed contains sensitive data”
-
----
-
-#### Agent 4: Explanation Agent
-- **Role**: Translate analysis into human language.
-- **Responsibilities**:
-  - Generate a clear explanation
-  - Explain *why* this matters
-  - Recommend next steps
-- **Example Output**:
-  ```text
-  The user logged in from Russia for the first time.
-  This behavior deviates from their usual login pattern.
-  Such anomalies often indicate compromised credentials.
-  Recommended action: Verify user identity and reset credentials.
-  ```
-
----
-
-#### Agent 5: SOC Manager Agent
-- **Role**: Final decision-maker.
-- **Responsibilities**:
-  - Decide alert priority
-  - Approve alert for analyst visibility
-  - Add urgency framing
-- **Output**:
-  ```json
-  {
-    "final_severity": "HIGH",
-    "action": "IMMEDIATE_REVIEW"
-  }
-  ```
-
----
-
-#### CrewAI Execution Model
-- Agents run sequentially
-- Shared memory context
-- One alert = one agent workflow
-- Failures gracefully fallback to rule-based output
-
----
-
-### 5. Alert Store
-
-**Purpose**
-Persist finalized alerts for the UI.
-
-**Implementation**
-- SQLite or in-memory store
-
-**Fields**
-- `alert_id`
-- `timestamp`
-- `user`
-- `threat_type`
-- `severity`
-- `explanation`
-- `raw_events`
-
----
-
-### 6. Backend API (Frontend Facing)
-
-**Endpoints**
-- `GET /alerts`
-- `GET /alerts/{id}`
-- `GET /metrics`
-
-**Key Requirement**
-- API must expose **agent-generated explanations**
-
----
-
-### 7. Frontend (Lovable)
-
-**Purpose**
-Showcase agentic SOC behavior visually.
-
-**Required Screens**
-1. **Live Alert Feed**: Real-time updates, Severity badges.
-2. **Alert Detail View**: Explanation text, “Generated by AI Agents” indicator, Event timeline.
-3. **Agent Trace**: Show which agents contributed (e.g., Threat Analyst → Explanation Agent → SOC Manager).
+**Agent Insights (`client/src/pages/AgentInsights.tsx`)**
+- Live 6-agent pipeline with status dots (idle/running/completed/error), 3s polling
+- "Run on Latest Alert" button → `POST /agents/trigger`
+- Clickable agent cards expand detail panel with execution trace, task count, avg time
+- Terminal window shows real `last_execution_trace` lines from last crew run
 
 ---
 
 ## Demo Flow (Scripted)
-1. Start log generator
-2. Logs stream live
-3. Detection fires
-4. CrewAI agents process the alert
-5. Alert appears with explanation
-6. Click alert → show reasoning
-7. Emphasize agent collaboration
+
+1. Start backend: `cd server && python main.py`
+2. Start frontend: `cd client && npm run dev`
+3. Logs stream live in the backend terminal
+4. Detection fires (brute force, suspicious login, or insider threat)
+5. 6-agent pipeline analyzes the signal (~5–30 seconds depending on Groq)
+6. Alert appears in frontend with AI-generated explanation
+7. Click alert → full agent trace visible
+8. Click "Take Ownership" → status persists to backend
+9. Click "Execute" on a recommended action → blocked IP / credential reset
+10. Switch to Agent Insights → click "Run on Latest Alert" → watch pipeline live
+
+**Key Pitch Lines:**
+- "This is not alerting, this is reasoning."
+- "Each alert is a mini SOC team."
+- "Rules today, ML tomorrow — agents stay."
+- "Agents explain what junior analysts miss."
 
 ---
 
-## Tech Stack (POC)
+## Known Gaps (Planned for Future Phases)
 
-| Layer | Tech |
-| :--- | :--- |
-| **Language** | Python 3.11 |
-| **API** | FastAPI |
-| **Agents** | CrewAI |
-| **Storage** | SQLite |
-| **Frontend** | Lovable |
-| **Data** | Synthetic JSON |
-
----
-
-## Suggested Repo Structure
-
-```text
-arceux-poc/
-├── agents/             # CrewAI Agent definitions
-│   ├── context_agent.py
-│   ├── explanation_agent.py
-│   ├── ingestion_agent.py
-│   ├── soc_manager_agent.py
-│   └── threat_agent.py
-├── alerts.db           # SQLite database
-├── api.py              # Main API entry point
-├── crew_runner.py      # Orchestrates Agent execution
-├── detection_engine.py # Rule-based detection logic
-├── ingestion_service.py# Direct log ingestion API
-└── log_generator.py    # Synthetic log producer
-```
-
----
-
-## Timeline (Fast POC)
-
-| Day | Deliverable |
-| :--- | :--- |
-| **Day 1** | Logs + ingestion |
-| **Day 2** | Detection rules |
-| **Day 3** | CrewAI agents |
-| **Day 4** | Frontend |
-| **Day 5** | Demo polish |
-
----
-
-## Key Pitch Lines
-- “This is not alerting, this is reasoning.”
-- “Each alert is a mini SOC team.”
-- “Agents explain what junior analysts miss.”
-- “Rules today, ML tomorrow — agents stay.”
-
----
-
-## Risks & Mitigations
-
-| Risk | Mitigation |
-| :--- | :--- |
-| **Technically simplistic** | Strong agent narrative + clean UI |
-| **Accuracy concerns** | Clarify this is a Phase-0 reasoning POC |
+| Feature | Notes |
+|---------|-------|
+| WebSocket push | Currently HTTP polling at 2–5s |
+| Database persistence | JSON file is POC-only; PostgreSQL/MongoDB needed for scale |
+| Authentication / RBAC | No auth — all endpoints are open |
+| SIEM connectors | Only synthetic logs; no Splunk, ELK, Chronicle |
+| ML anomaly detection | Rules-only; no statistical models |
+| Slack / ServiceNow | No third-party notifications or ticketing |
+| Multi-tenancy | Single-instance, single-org design |
+| Audit logging | No record of who viewed/actioned what |

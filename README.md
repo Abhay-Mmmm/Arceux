@@ -20,7 +20,7 @@ Arceux is a next-generation SOC dashboard designed to visualize, analyze, and re
 
 ### **Backend**
 - **API**: FastAPI (Python)
-- **AI Engine**: OpenAI Integration + CrewAI
+- **AI Engine**: Groq (`llama-3.3-70b-versatile`) + CrewAI
 - **Data**: JSON-based storage for simulation
 
 ## 📦 Project Structure

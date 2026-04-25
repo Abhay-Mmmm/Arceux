@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { fetchAgentStatus, triggerAgentPipeline, AgentStatus } from '../services/api';
 import {
     Target, ShieldAlert, BrainCircuit, GitBranch, FileText, Zap,
-    Activity, Cpu, RefreshCw, Play, Clock, CheckCircle, AlertCircle, Loader2
+    Activity, Cpu, RefreshCw, Play, Clock, CheckCircle, Loader2
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
