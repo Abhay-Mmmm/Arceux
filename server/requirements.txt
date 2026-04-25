@@ -1,0 +1,19 @@
+# Arxis SOC Backend Dependencies
+
+# Core Framework
+fastapi
+uvicorn[standard]
+pydantic
+
+# AI Agents
+crewai
+langchain
+langchain-openai
+
+# Utilities
+python-dotenv
+requests
+aiohttp<3.10
+
+# Development
+pytest
