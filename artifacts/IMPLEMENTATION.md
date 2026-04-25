@@ -249,4 +249,38 @@ VITE_API_URL=http://localhost:8000   # Override backend URL
 
 The core pipeline — log ingestion → rule-based detection → CrewAI agent analysis (Groq) → alert creation → frontend visualization — is fully functional end-to-end. Alert status changes persist to the backend. Execute buttons on recommended actions trigger real backend handlers that populate `blocked_ips` and `flagged_users` sets. The chatbot uses live Groq calls when a key is configured, falling back to data-driven templates when not. The Agent Insights page polls live agent state and supports manual pipeline triggering. The UI is polished, dark-themed, and animated.
 
+---
+
+## Bug Fixes & Debugging Log
+
+**2026-04-25 — AgentInsights.tsx Blank Page**
+
+*Root Cause:* The running backend process was not the current code (missing `/agents/status` endpoint). Additionally, `AgentInsights.tsx` silently swallowed all fetch errors, resulting in a blank page when the API call failed.
+
+*Diagnosis:*
+1. Verified `/agents/status` endpoint exists in source code (`server/api.py:282`).
+2. Checked running server routes via OpenAPI — endpoint was missing.
+3. Source file had correct endpoint but wasn't running the latest code.
+4. Frontend catch block silenced all errors (lines 69-78 of `AgentInsights.tsx`).
+
+*Fix:*
+1. **Backend:** Replaced Windows-incompatible emoji characters causing encoding crashes. Fixed in:
+   - `server/storage.py` — Changed `✅`/`⚠️` to `[OK]`/`[WARN]`.
+   - `server/api.py` — Changed `🤖`/`🚨`/`✅`/`🛑` to `[*]`/`[ALERT]`/`[OK]`/`[STOP]`.
+   - `server/main.py` — Changed all print emojis to ASCII equivalents.
+2. **Frontend:** Added explicit error state in `AgentInsights.tsx`:
+   - Added `error` state variable.
+   - Modified `loadAgents` to set error message on failure.
+   - Added error rendering in pipeline flow and agent cards grid.
+
+*Files Changed:*
+- `server/storage.py` — Emoji → ASCII
+- `server/api.py` — Emoji → ASCII  
+- `server/main.py` — Emoji → ASCII
+- `client/src/pages/AgentInsights.tsx` — Added error handling and rendering
+
+*Verification:*
+- `GET /agents/status` returns 200 with all 6 agent states.
+- Frontend properly renders agents or shows error message (not blank).
+
 Remaining gaps before production-grade use: a real database, authentication, SIEM connectors, and WebSocket real-time push.

@@ -62,6 +62,7 @@ function formatRelativeTime(iso: string | null): string {
 const AgentInsights: React.FC = () => {
     const [agents, setAgents] = useState<AgentStatus[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
     const [triggering, setTriggering] = useState(false);
     const [triggerMsg, setTriggerMsg] = useState<{ text: string; ok: boolean } | null>(null);
@@ -70,8 +71,9 @@ const AgentInsights: React.FC = () => {
         try {
             const data = await fetchAgentStatus();
             setAgents(data);
-        } catch {
-            // silently keep last known state
+            setError(null);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to load agents');
         } finally {
             setLoading(false);
         }
@@ -149,7 +151,11 @@ const AgentInsights: React.FC = () => {
                                 <div className="h-3 w-16 bg-muted rounded animate-pulse" />
                             </div>
                         ))
-                        : agents.map((agent) => {
+                        : error ? (
+                            <div className="flex-1 flex items-center justify-center py-8 text-red-400 text-sm">
+                                {error}
+                            </div>
+                        ) : agents.map((agent) => {
                             const meta = AGENT_META[agent.name] ?? { icon: Target, shortRole: '?' };
                             const Icon = meta.icon;
                             const style = STATUS_STYLES[agent.status] ?? STATUS_STYLES.idle;
@@ -220,7 +226,11 @@ const AgentInsights: React.FC = () => {
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <div key={i} className="h-full border border-border/50 rounded-lg bg-card animate-pulse" />
                     ))
-                    : agents.map((agent) => {
+                    : error ? (
+                        <div className="col-span-6 flex items-center justify-center py-12 text-red-400 text-sm">
+                            {error}
+                        </div>
+                    ) : agents.map((agent) => {
                         const meta = AGENT_META[agent.name] ?? { icon: Target, shortRole: '?', description: '' };
                         const Icon = meta.icon;
                         const style = STATUS_STYLES[agent.status] ?? STATUS_STYLES.idle;

@@ -46,7 +46,7 @@ async def process_pending_signals():
                 from models import DetectionSignal
                 signal = DetectionSignal(**signal_dict)
                 
-                print(f"\n🤖 Processing signal {signal.signal_id} with AI agents...")
+                print(f"\n[*] Processing signal {signal.signal_id} with AI agents...")
                 
                 # Run agent analysis in threadpool to avoid blocking event loop
                 agent_output = await run_in_threadpool(run_agent_analysis, signal)
@@ -74,10 +74,10 @@ async def process_pending_signals():
                 storage.add_alert(alert)
                 storage.mark_signal_processed(signal.signal_id)
                 
-                print(f"✅ Alert {alert.alert_id} created from signal {signal.signal_id}")
+                print(f"[OK] Alert {alert.alert_id} created from signal {signal.signal_id}")
         
         except Exception as e:
-            print(f"⚠️  Error in background processing: {e}")
+            print(f"[WARN] Error in background processing: {e}")
         
         # Check every 5 seconds
         await asyncio.sleep(5)
@@ -88,13 +88,13 @@ async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle."""
     # Start background task for processing signals
     task = asyncio.create_task(process_pending_signals())
-    print("✅ Background signal processor started")
+    print("[OK] Background signal processor started")
     
     yield
     
     # Shutdown
     task.cancel()
-    print("🛑 Background processor stopped")
+    print("[STOP] Background processor stopped")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -141,7 +141,7 @@ async def ingest_log(log: SecurityLog):
     if signal:
         # Store signal for background processing
         storage.add_signal(signal)
-        print(f"🚨 Detection: {signal.signal_type.value} for {signal.user}")
+        print(f"[ALERT] Detection: {signal.signal_type.value} for {signal.user}")
         
         return {
             "status": "detected",
@@ -603,14 +603,14 @@ if __name__ == "__main__":
     import uvicorn
     
     print("""
-    ╔═══════════════════════════════════════════╗
-    ║                                           ║
-    ║          🛡️  ARCEUX SOC BACKEND 🛡️         ║
-    ║                                           ║
-    ║  AI-Native Security Operations Center     ║
-    ║  Powered by CrewAI                        ║
-    ║                                           ║
-    ╚═══════════════════════════════════════════╝
+    ==================================================
+    =                                           =
+    =          [SHIELD]  ARCEUX SOC BACKEND [SHIELD] =
+    =                                           =
+    =  AI-Native Security Operations Center     =
+    =  Powered by CrewAI                        =
+    =                                           =
+    ==================================================
     """)
     
     uvicorn.run(

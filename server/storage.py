@@ -217,7 +217,7 @@ class ArceuxStorage:
             with open(alerts_file, "w") as f:
                 json.dump(self.alerts, f, indent=2)
         except Exception as e:
-            print(f"⚠️  Failed to persist alerts: {e}")
+            print(f"[WARN] Failed to persist alerts: {e}")
     
     def _load_from_disk(self) -> None:
         """Load alerts from disk on startup."""
@@ -226,9 +226,9 @@ class ArceuxStorage:
             try:
                 with open(alerts_file, "r") as f:
                     self.alerts = json.load(f)
-                print(f"✅ Loaded {len(self.alerts)} alerts from disk")
+                print(f"[OK] Loaded {len(self.alerts)} alerts from disk")
             except Exception as e:
-                print(f"⚠️  Failed to load alerts: {e}")
+                print(f"[WARN] Failed to load alerts: {e}")
     
     def clear_all(self) -> None:
         """Clear all data (for testing)."""
