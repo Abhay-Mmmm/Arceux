@@ -22,7 +22,7 @@ import requests
 
 # Import all components
 from models import SecurityLog
-from log_generator import generate_log, INGESTION_URL
+from log_generator import generate_log, generate_brute_force_burst, INGESTION_URL
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Global state
@@ -53,28 +53,46 @@ def run_log_generator():
     
     while not shutdown_event.is_set():
         try:
-            log = generate_log()
-            
-            # Print condensed log info
-            print(f"[LOG] [{log_count + 1:04d}] {log['event_type']:20s} | {log['user']:30s} | {log['location']}")
-            
-            # Send to ingestion API
-            try:
-                response = requests.post(
-                    INGESTION_URL,
-                    json=log,
-                    timeout=2
-                )
-                if response.status_code == 200:
-                    log_count += 1
-                    # Show if detection occurred
-                    data = response.json()
-                    if data.get("status") == "detected":
-                        print(f"[DETECT] Detection: {data.get('signal_type')}")
-            except requests.exceptions.RequestException:
-                # API busy, minimal noise
-                pass
-            
+            # ~15% chance: fire a brute-force burst (7 rapid failed logins, same user/IP)
+            if random.random() < 0.15:
+                burst = generate_brute_force_burst()
+                print(f"[BURST] Brute-force sequence → {burst[0]['user']} from {burst[0]['location']}")
+                for b_log in burst:
+                    if shutdown_event.is_set():
+                        break
+                    try:
+                        response = requests.post(INGESTION_URL, json=b_log, timeout=2)
+                        if response.status_code == 200:
+                            log_count += 1
+                            data = response.json()
+                            if data.get("status") == "detected":
+                                print(f"[DETECT] Detection: {data.get('signal_type')}")
+                    except requests.exceptions.RequestException:
+                        pass
+                    time.sleep(0.4)  # rapid succession within 2-min window
+            else:
+                log = generate_log()
+
+                # Print condensed log info
+                print(f"[LOG] [{log_count + 1:04d}] {log['event_type']:20s} | {log['user']:30s} | {log['location']}")
+
+                # Send to ingestion API
+                try:
+                    response = requests.post(
+                        INGESTION_URL,
+                        json=log,
+                        timeout=2
+                    )
+                    if response.status_code == 200:
+                        log_count += 1
+                        # Show if detection occurred
+                        data = response.json()
+                        if data.get("status") == "detected":
+                            print(f"[DETECT] Detection: {data.get('signal_type')}")
+                except requests.exceptions.RequestException:
+                    # API busy, minimal noise
+                    pass
+
             # Random interval
             time.sleep(random.uniform(1, 3))
             
@@ -139,23 +157,23 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-# Print banner
+    # Print banner
     print("""
-    ====================================================
-    =                                                   =
-    =            [SHIELD] ARCEUX SOC - UNIFIED SYSTEM [SHIELD]   =
-    =                                                   =
-    =  AI-Native Security Operations Center            =
-    =  Powered by CrewAI + FastAPI                     =
-    =                                                   =
-    =  Components:                                       =
-    =    - FastAPI Backend (with agent processing)       =
-    =    - Synthetic Log Generator                       =
-    =    - Real-time Detection Engine                =
-    =    - Multi-Agent AI Analysis                   =
-    =                                                   =
-    ====================================================
-    """)
+====================================================
+=                                                  =
+=          ARCEUX SOC  -  UNIFIED SYSTEM           =
+=                                                  =
+=  AI-Native Security Operations Center            =
+=  Powered by CrewAI + FastAPI + Groq              =
+=                                                  =
+=  Components:                                     =
+=    - FastAPI Backend (with agent processing)     =
+=    - Synthetic Log Generator                     =
+=    - Real-time Detection Engine                  =
+=    - Multi-Agent AI Analysis                     =
+=                                                  =
+====================================================
+""")
     
     print(f"[*] Started at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
     

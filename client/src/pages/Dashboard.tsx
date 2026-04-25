@@ -503,36 +503,47 @@ const handleSystemCheck = () => {
 
 {/* ROW 2: System Metrics | Severity | Alerts | Compliance */}
       <div className="col-span-2 row-span-5 flex flex-col min-h-0">
-        <Card title="System" className="flex-1 min-h-0 overflow-hidden" noPadding>
-          <div className="p-3 h-full flex flex-col justify-between gap-2">
-            <div className="flex-1 flex flex-col justify-center gap-1">
-              <div className="flex justify-between text-[10px] items-end">
-                <span className="text-muted-foreground font-medium">Total Logs</span>
-                <span className="font-mono font-bold">{realtimeComponents.reduce((acc, c) => acc + c.activity, 0) || 0}</span>
+        <Card title="System Perf" className="flex-1 min-h-0 overflow-hidden" noPadding>
+          {(() => {
+            const totalActivity = realtimeComponents.reduce((acc, c) => acc + c.activity, 0);
+            const avgLatencyVal = realtimeComponents.length > 0
+              ? realtimeComponents.reduce((acc, c) => acc + c.latency, 0) / realtimeComponents.length
+              : 0;
+            // CPU: driven by event throughput across all components
+            const cpu = realtimeComponents.length === 0 ? 0 : Math.min(Math.round((totalActivity / 400) * 100), 99);
+            // Memory: driven by alert backlog pressure
+            const mem = Math.min(Math.round((liveAlerts.length / 18) * 100), 97);
+            // Network: inverse of avg latency — lower latency = higher throughput %
+            const net = realtimeComponents.length === 0 ? 0 : Math.max(5, Math.min(99, Math.round(100 - avgLatencyVal / 8)));
+
+            const barColor = (v: number) =>
+              v >= 85 ? 'bg-red-500' : v >= 60 ? 'bg-yellow-500' : 'bg-green-500';
+
+            return (
+              <div className="p-3 h-full flex flex-col justify-between gap-2">
+                {([
+                  { label: 'CPU', value: cpu, suffix: '%' },
+                  { label: 'Memory', value: mem, suffix: '%' },
+                  { label: 'Network', value: net, suffix: '%' },
+                ] as { label: string; value: number; suffix: string }[]).map(({ label, value, suffix }) => (
+                  <div key={label} className="flex-1 flex flex-col justify-center gap-1">
+                    <div className="flex justify-between text-[10px] items-end">
+                      <span className="text-muted-foreground font-medium">{label}</span>
+                      <span className={cn('font-mono font-bold', value >= 85 ? 'text-red-400' : value >= 60 ? 'text-yellow-400' : 'text-green-400')}>
+                        {value}{suffix}
+                      </span>
+                    </div>
+                    <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                      <div
+                        className={cn('h-full transition-all duration-700', barColor(value))}
+                        style={{ width: `${value}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                <div className="h-full bg-blue-500" style={{ width: '60%' }} />
-              </div>
-            </div>
-            <div className="flex-1 flex flex-col justify-center gap-1">
-              <div className="flex justify-between text-[10px] items-end">
-                <span className="text-muted-foreground font-medium">Active Components</span>
-                <span className="font-mono font-bold">{realtimeComponents.filter(c => c.status === 'healthy').length}/{realtimeComponents.length}</span>
-              </div>
-              <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                <div className={cn("h-full", realtimeComponents.filter(c => c.status === 'healthy').length === realtimeComponents.length ? 'bg-green-500' : 'bg-yellow-500')} style={{ width: `${realtimeComponents.length > 0 ? (realtimeComponents.filter(c => c.status === 'healthy').length / realtimeComponents.length) * 100 : 0}%` }} />
-              </div>
-            </div>
-            <div className="flex-1 flex flex-col justify-center gap-1">
-              <div className="flex justify-between text-[10px] items-end">
-                <span className="text-muted-foreground font-medium">Avg Latency</span>
-                <span className="font-mono font-bold">{realtimeComponents.length > 0 ? Math.round(realtimeComponents.reduce((acc, c) => acc + c.latency, 0) / realtimeComponents.length) : 0}ms</span>
-              </div>
-              <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                <div className="h-full bg-purple-500" style={{ width: '45%' }} />
-              </div>
-            </div>
-          </div>
+            );
+          })()}
         </Card>
       </div>
 

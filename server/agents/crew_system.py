@@ -11,30 +11,20 @@ from models import DetectionSignal
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LLM Initialisation (Groq via LangChain)
+# LLM Initialisation (Groq via LiteLLM)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 groq_llm = None
 
-try:
-    from langchain_groq import ChatGroq
+_api_key = os.getenv("GROQ_API_KEY")
+_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-    _api_key = os.getenv("GROQ_API_KEY")
-    _model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-
-    if _api_key:
-        groq_llm = ChatGroq(
-            model=_model,
-            groq_api_key=_api_key,
-            temperature=0.1,
-        )
-        print(f"Groq LLM for CrewAI initialised ({_model})")
-    else:
-        print("GROQ_API_KEY not set — CrewAI agents will use fallback trace")
-except ImportError:
-    print("langchain-groq not installed — CrewAI agents will use fallback trace")
-except Exception as e:
-    print(f"Groq LLM init error: {e} — CrewAI agents will use fallback trace")
+if _api_key:
+    # CrewAI uses LiteLLM — pass a string in "provider/model" format
+    groq_llm = f"groq/{_model}"
+    print(f"Groq LLM for CrewAI initialised ({_model})")
+else:
+    print("GROQ_API_KEY not set — CrewAI agents will use fallback trace")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

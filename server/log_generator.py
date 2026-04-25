@@ -59,6 +59,29 @@ def generate_ip() -> str:
     return f"{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}.{random.randint(1, 255)}"
 
 
+def generate_brute_force_burst() -> list:
+    """
+    Generate 7 rapid failed logins from one user — guaranteed to trigger BRUTE_FORCE detection.
+    All from the same IP and suspicious location to make the attack realistic.
+    """
+    target_user = random.choice(USERS)
+    attack_ip = generate_ip()
+    location = random.choice(SUSPICIOUS_LOCATIONS)
+    asset = random.choice(ASSETS)
+
+    return [
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "user": target_user,
+            "event_type": "failed_login",
+            "ip": attack_ip,
+            "location": location,
+            "asset": asset,
+        }
+        for _ in range(7)
+    ]
+
+
 def generate_log() -> Dict[str, Any]:
     """
     Generate a single synthetic security log.

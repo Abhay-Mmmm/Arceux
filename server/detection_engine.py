@@ -55,11 +55,27 @@ class DetectionEngine:
             if signal:
                 return signal
         
-        # Rule 2: Suspicious Login
+        # Rule 2: Suspicious Login (successful or new-country from risky location)
         if log.event_type in ["successful_login", "new_country_login"]:
             signal = self._check_suspicious_login(log)
             if signal:
                 return signal
+
+        # Rule 2b: Failed login attempt FROM a suspicious location (MEDIUM — probe/credential spray)
+        if log.event_type == "failed_login" and log.location in self.suspicious_locations:
+            return DetectionSignal(
+                signal_id=str(uuid.uuid4()),
+                signal_type=SignalType.SUSPICIOUS_LOGIN,
+                user=log.user,
+                severity=Severity.MEDIUM,
+                events=[log],
+                detected_at=datetime.now(timezone.utc).isoformat(),
+                metadata={
+                    "location": log.location,
+                    "ip": log.ip,
+                    "risk_reason": "Failed login attempt from high-risk location",
+                }
+            )
         
         # Rule 3: Insider Threat
         if log.event_type == "privilege_escalation":

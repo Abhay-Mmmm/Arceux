@@ -219,4 +219,9 @@ __marimo__/
 
 #Node
 node_modules/*
-node_modules    
+node_modules
+
+#AI Agents
+.claude
+.gemini
+.gpt
