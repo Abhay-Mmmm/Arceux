@@ -5,11 +5,19 @@ Rules-based threat detection that analyzes incoming logs and generates signals.
 Each detection rule has a clear, testable condition.
 """
 
+import os
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from collections import defaultdict, deque
 from models import SecurityLog, DetectionSignal, SignalType, Severity
+
+
+# Shared high-risk location set — used by both DetectionEngine and RiverAnomalyDetector
+SUSPICIOUS_LOCATIONS = {
+    "Russia", "North Korea", "Unknown",
+    "Tor Exit Node", "Romania", "Iran",
+}
 
 
 class DetectionEngine:
@@ -31,13 +39,21 @@ class DetectionEngine:
         self.data_download_window: dict = defaultdict(lambda: deque(maxlen=30))
         self.last_login_location: Dict[str, Dict[str, Any]] = {}
 
-        self.suspicious_locations = {
-            "Russia", "North Korea", "Unknown",
-            "Tor Exit Node", "Romania", "Iran",
-        }
+        self.suspicious_locations = SUSPICIOUS_LOCATIONS
+
+        # River online ML anomaly detector (Rule 7)
+        threshold = float(os.getenv("RIVER_ANOMALY_THRESHOLD", "0.75"))
+        _river = RiverAnomalyDetector(threshold)
+        self.river_detector = _river if _river._available else None
+        if self.river_detector is not None:
+            print(f"[RIVER] Anomaly detector initialized (threshold={threshold}, cohorts=3)")
 
     def analyze(self, log: SecurityLog) -> Optional[DetectionSignal]:
         """Analyze a single log and return a signal if a rule matches."""
+
+        # River learns from every event regardless of which rule fires.
+        # Rule signals take priority; river_signal is the fallback if all rules miss.
+        river_signal = self.river_detector.detect(log) if self.river_detector is not None else None
 
         # ── Rule 1: Brute Force ──────────────────────────────────────────
         if log.event_type == "failed_login":
@@ -98,7 +114,8 @@ class DetectionEngine:
             if signal:
                 return signal
 
-        return None
+        # Rule 7: River ML — fallback when no rule matched
+        return river_signal
 
     # ── Detection Methods ────────────────────────────────────────────────
 
@@ -253,6 +270,94 @@ class DetectionEngine:
                     "time_window": "5 minutes",
                     "risk_reason": f"Downloaded from {len(unique_assets)} different assets in 5 minutes",
                 }
+            )
+        return None
+
+
+class RiverAnomalyDetector:
+    """
+    Online ML anomaly detector using River's HalfSpaceTrees.
+
+    Maintains 3 independent HST models (one per user cohort) and learns
+    continuously from every incoming event. Generates ANOMALOUS_ACCESS
+    signals when the anomaly score exceeds the configured threshold.
+
+    Warmup: the first ~50 events per cohort produce near-zero scores while
+    the model builds its baseline — this is expected, not a bug.
+    """
+
+    def __init__(self, threshold: float = 0.75) -> None:
+        self._threshold = threshold
+        self._event_rate_windows: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
+
+        try:
+            from river.anomaly import HalfSpaceTrees
+            self._models: Dict[str, Any] = {
+                "admin_cohort":    HalfSpaceTrees(n_trees=10, height=8, window_size=50, seed=42),
+                "service_cohort":  HalfSpaceTrees(n_trees=10, height=8, window_size=50, seed=42),
+                "standard_cohort": HalfSpaceTrees(n_trees=10, height=8, window_size=50, seed=42),
+            }
+            self._available = True
+        except ImportError:
+            self._available = False
+            self._models = {}
+            print("[RIVER] WARNING: river not installed. ML anomaly detection disabled.")
+
+    def _get_cohort(self, username: str) -> str:
+        u = username.lower()
+        if "admin" in u or "root" in u:
+            return "admin_cohort"
+        if "service" in u or "svc" in u:
+            return "service_cohort"
+        return "standard_cohort"
+
+    def _update_event_rate(self, user: str, now: datetime) -> int:
+        """Append timestamp to per-user window; return count within last 60 s."""
+        window = self._event_rate_windows[user]
+        window.append(now)
+        cutoff = now - timedelta(seconds=60)
+        return sum(1 for t in window if t > cutoff)
+
+    def _extract_features(self, log: SecurityLog, now: datetime) -> Dict[str, float]:
+        return {
+            "hour_of_day":            float(now.hour),
+            "is_suspicious_location": 1.0 if log.location in SUSPICIOUS_LOCATIONS else 0.0,
+            "is_failed_login":        1.0 if log.event_type == "failed_login" else 0.0,
+            "is_privilege_escalation": 1.0 if log.event_type == "privilege_escalation" else 0.0,
+            "is_data_download":       1.0 if log.event_type == "data_download" else 0.0,
+            "user_event_rate":        float(self._update_event_rate(log.user, now)),
+        }
+
+    def detect(self, log: SecurityLog) -> Optional[DetectionSignal]:
+        """Learn from the event, then return a signal if score >= threshold."""
+        if not self._available:
+            return None
+
+        now = datetime.fromisoformat(log.timestamp.replace("Z", "+00:00"))
+        cohort = self._get_cohort(log.user)
+        features = self._extract_features(log, now)
+        model = self._models[cohort]
+
+        model.learn_one(features)
+        score: float = model.score_one(features)
+
+        if score >= self._threshold:
+            return DetectionSignal(
+                signal_id=str(uuid.uuid4()),
+                signal_type=SignalType.ANOMALOUS_ACCESS,
+                user=log.user,
+                severity=Severity.HIGH,
+                events=[log],
+                detected_at=datetime.now(timezone.utc).isoformat(),
+                metadata={
+                    "river_ml": True,
+                    "cohort": cohort,
+                    "anomaly_score": round(score, 3),
+                    "risk_reason": (
+                        f"River ML anomaly detected for user {log.user} "
+                        f"(cohort: {cohort}, score: {score:.3f})"
+                    ),
+                },
             )
         return None
 
