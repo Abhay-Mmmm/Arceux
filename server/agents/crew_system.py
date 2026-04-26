@@ -77,8 +77,14 @@ def _make_llm(agent_name: str):
     try:
         from crewai import LLM
         return LLM(model=f"groq/{_MODEL_AGENTS}", api_key=key)
-    except Exception:
-        # Older CrewAI without LLM class — string format (uses GROQ_API_KEY from env)
+    except Exception as exc:
+        key_hint = (key[:8] + "...") if key else "missing"
+        print(
+            f"[WARN] _make_llm({agent_name!r}): crewai.LLM unavailable "
+            f"(key={key_hint}, model=groq/{_MODEL_AGENTS}). "
+            f"Falling back to string format — per-agent key WILL NOT be used. "
+            f"Reason: {exc}"
+        )
         return f"groq/{_MODEL_AGENTS}"
 
 
@@ -97,7 +103,7 @@ def _build_orchestrator(signal: DetectionSignal) -> Tuple[Agent, Task]:
         role=name,
         goal="Coordinate the incident response lifecycle and manage global incident context",
         backstory="SOC Incident Commander. Direct the team efficiently. See the big picture.",
-        verbose=True,
+        verbose=False,
         allow_delegation=True,
         max_iter=1,
         memory=False,
@@ -122,7 +128,7 @@ def _build_alert_handler(signal: DetectionSignal) -> Tuple[Agent, Task]:
         role=name,
         goal="Triages incoming signals, reduces noise, and correlates related events",
         backstory="Expert Tier-1 Security Analyst. Filter noise, extract signal. Group related events.",
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=1,
         memory=False,
@@ -147,7 +153,7 @@ def _build_threat_analyzer(signal: DetectionSignal) -> Tuple[Agent, Task]:
         role=name,
         goal="Classify the behavior against MITRE ATT&CK and determine attacker intent",
         backstory="Threat Intelligence Specialist. Map behaviors to MITRE. Identify attacker TTPs.",
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=1,
         memory=False,
@@ -173,7 +179,7 @@ def _build_root_cause(signal: DetectionSignal) -> Tuple[Agent, Task]:
         role=name,
         goal="Reconstruct the attack timeline and identify the initial entry point",
         backstory="Senior Forensic Investigator. Walk backwards through time. Connect the dots.",
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=1,
         memory=False,
@@ -199,7 +205,7 @@ def _build_compliance(signal: DetectionSignal) -> Tuple[Agent, Task]:
         role=name,
         goal="Evaluate incident against GDPR, IRDAI, and SOC 2 requirements",
         backstory="GRC Officer. Focus on PII, reporting deadlines (72h), and legal exposure.",
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=1,
         memory=False,
@@ -225,7 +231,7 @@ def _build_response_automation(signal: DetectionSignal) -> Tuple[Agent, Task]:
         role=name,
         goal="Draft safe, effective containment and remediation plans",
         backstory="SOAR Specialist. Define counter-measures. Prioritize speed with safety protocols.",
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
         max_iter=1,
         memory=False,

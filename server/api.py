@@ -37,7 +37,13 @@ from agents.crew_system import run_agent_analysis
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def process_pending_signals():
-    """Background task: Process signals with CrewAI agents (rate-limited)."""
+    """Background task: Process signals with CrewAI agents (rate-limited).
+
+    pipeline_running is a single-writer flag — only this coroutine ever sets it
+    True, and it is always reset in either the inner finally or the outer except.
+    No asyncio.Lock is needed because there is exactly one instance of this task
+    and all check/set operations are synchronous (no yield between them).
+    """
     while True:
         try:
             now = time.time()
@@ -94,13 +100,26 @@ async def process_pending_signals():
                 print(f"[OK] Alert {alert.alert_id} created from signal {signal.signal_id}")
 
             except Exception as e:
-                print(f"[WARN] Error processing signal: {e}")
+                # Increment attempt counter on the signal dict (mutates in-place in storage.signals).
+                # Dead-letter after 3 failures so a malformed/deterministic-error signal
+                # cannot cause an infinite retry loop.
+                attempts = signal_dict.get("attempts", 0) + 1
+                signal_dict["attempts"] = attempts
+                print(f"[WARN] Error processing signal {signal.signal_id} (attempt {attempts}): {e}")
+                if attempts >= 3:
+                    print(f"[WARN] Dead-lettering signal {signal.signal_id} after {attempts} failed attempts")
+                    storage.mark_signal_processed(signal.signal_id)
             finally:
                 storage.pipeline_running = False
                 storage.last_pipeline_run = time.time()
 
         except Exception as e:
+            # Outer guard: catches failures in get_pending_signals, DetectionSignal(**), etc.
+            # pipeline_running is reset here so the next iteration can proceed.
+            # last_pipeline_run is set to enforce the cooldown even on unexpected failures,
+            # preventing an unthrottled retry loop.
             storage.pipeline_running = False
+            storage.last_pipeline_run = time.time()
             print(f"[WARN] Error in background processing: {e}")
 
         await asyncio.sleep(5)

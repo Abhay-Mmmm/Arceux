@@ -51,6 +51,26 @@ const STATUS_CFG = {
 
 type AgentStatusKey = keyof typeof STATUS_CFG;
 
+// Structural comparator for agent lists — avoids JSON.stringify on the whole
+// object, which can break on reordered keys or non-JSON-safe values.
+// Only compares the fields that are actually rendered.
+function compareAgentLists(prev: AgentStatus[], next: AgentStatus[]): boolean {
+    if (prev.length !== next.length) return false;
+    for (let i = 0; i < prev.length; i++) {
+        const p = prev[i], n = next[i];
+        if (
+            p.name !== n.name ||
+            p.status !== n.status ||
+            p.last_run !== n.last_run ||
+            p.tasks_completed !== n.tasks_completed ||
+            p.execution_count !== n.execution_count ||
+            p.avg_execution_time_ms !== n.avg_execution_time_ms ||
+            JSON.stringify(p.last_execution_trace) !== JSON.stringify(n.last_execution_trace)
+        ) return false;
+    }
+    return true;
+}
+
 function formatRelativeTime(iso: string | null): string {
     if (!iso) return '—';
     const date = new Date(iso);
@@ -66,7 +86,7 @@ function formatRelativeTime(iso: string | null): string {
 interface AgentCardProps {
     agent: AgentStatus;
     isSelected: boolean;
-    onSelect: () => void;
+    onSelect: (name: string) => void;
 }
 
 const AgentCard = React.memo(function AgentCard({ agent, isSelected, onSelect }: AgentCardProps) {
@@ -76,7 +96,7 @@ const AgentCard = React.memo(function AgentCard({ agent, isSelected, onSelect }:
 
     return (
         <button
-            onClick={onSelect}
+            onClick={() => onSelect(agent.name)}
             className={cn(
                 'h-full flex flex-col rounded-lg bg-card border overflow-hidden shadow-sm text-left',
                 isSelected ? 'border-primary/50' : 'border-border/40 hover:border-border/70',
@@ -189,7 +209,7 @@ const AgentCard = React.memo(function AgentCard({ agent, isSelected, onSelect }:
 interface PipelineNodeProps {
     agent: AgentStatus;
     isSelected: boolean;
-    onSelect: () => void;
+    onSelect: (name: string) => void;
 }
 
 const PipelineNode = React.memo(function PipelineNode({ agent, isSelected, onSelect }: PipelineNodeProps) {
@@ -201,7 +221,7 @@ const PipelineNode = React.memo(function PipelineNode({ agent, isSelected, onSel
 
     return (
         <button
-            onClick={onSelect}
+            onClick={() => onSelect(agent.name)}
             className="relative flex flex-col items-center gap-2 bg-card px-4 z-10 group"
         >
             <div className={cn(
@@ -254,11 +274,8 @@ const AgentInsights: React.FC = () => {
     const loadAgents = useCallback(async () => {
         try {
             const data = await fetchAgentStatus();
-            // Only update state when data actually changed — prevents re-render flicker
-            setAgents(prev => {
-                if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
-                return data;
-            });
+            // Only update state when rendered fields actually changed — prevents re-render flicker
+            setAgents(prev => compareAgentLists(prev, data) ? prev : data);
             everLoadedRef.current = true;
             setPollFailed(false);
         } catch (err) {
@@ -392,7 +409,7 @@ const AgentInsights: React.FC = () => {
                             key={agent.name}
                             agent={agent}
                             isSelected={selectedAgent === agent.name}
-                            onSelect={() => handleSelectAgent(agent.name)}
+                            onSelect={handleSelectAgent}
                         />
                     ))}
                 </div>
@@ -449,7 +466,7 @@ const AgentInsights: React.FC = () => {
                         key={agent.name}
                         agent={agent}
                         isSelected={selectedAgent === agent.name}
-                        onSelect={() => handleSelectAgent(agent.name)}
+                        onSelect={handleSelectAgent}
                     />
                 ))}
             </div>

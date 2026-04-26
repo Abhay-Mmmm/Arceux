@@ -1,8 +1,10 @@
 """
 Intelligent AI Chatbot — Groq LLM + Smart Template Fallback
 
-Uses Groq API (llama-3.3-70b-versatile) for live AI responses.
-Falls back to template-based responses when Groq is unavailable.
+Uses Groq API (default: llama-3.1-8b-instant via GROQ_MODEL_CHAT) for live AI
+responses. Kept intentionally lighter than the agent pipeline (llama-3.3-70b-
+versatile) to reduce token consumption and avoid competing for rate-limit
+headroom. Falls back to data-driven template responses when Groq is unavailable.
 """
 
 import os

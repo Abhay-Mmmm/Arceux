@@ -154,50 +154,35 @@ const Dashboard: React.FC = () => {
         };
     }, []);
 
-    // Poll high-priority alerts from backend
-    useEffect(() => {
-        let isMounted = true;
-
-        const pollAlerts = async () => {
-            try {
-                // Fetch only high and critical alerts
-                const allAlerts = await fetchAlerts({ limit: 50 });
-                if (isMounted) {
-                    const highPriority = allAlerts.filter(a => ['critical', 'high'].includes(a.severity));
-                    setLiveAlerts(highPriority);
-                    setAlertsLoading(false);
-                }
-            } catch (err) {
-                console.warn('Failed to fetch alerts, using mock data');
-                setAlertsLoading(false);
-            }
-        };
-
-        // Initial fetch
-        pollAlerts();
-
-        // Poll every 5 seconds for new alerts
-        const interval = setInterval(pollAlerts, 5000);
-
-        return () => {
-            isMounted = false;
-            clearInterval(interval);
-        };
-    }, []);
-
     // Live severity counts for the Threats bar chart
     const [severityCounts, setSeverityCounts] = useState({ CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 });
 
+    // Single 5 s poller — fetches alerts + severity metrics in parallel to avoid
+    // two independent intervals hitting the backend on the same cadence.
     useEffect(() => {
         let isMounted = true;
+
         const poll = async () => {
-            try {
-                const data = await fetchMetrics();
-                if (isMounted) setSeverityCounts(data.alerts_by_severity);
-            } catch {
-                // silent fail — chart keeps last known values
+            const [alertsResult, metricsResult] = await Promise.allSettled([
+                fetchAlerts({ limit: 50 }),
+                fetchMetrics(),
+            ]);
+
+            if (!isMounted) return;
+
+            if (alertsResult.status === 'fulfilled') {
+                const highPriority = alertsResult.value.filter(
+                    a => ['critical', 'high'].includes(a.severity)
+                );
+                setLiveAlerts(highPriority);
+            }
+            setAlertsLoading(false);
+
+            if (metricsResult.status === 'fulfilled') {
+                setSeverityCounts(metricsResult.value.alerts_by_severity);
             }
         };
+
         poll();
         const id = setInterval(poll, 5000);
         return () => { isMounted = false; clearInterval(id); };
