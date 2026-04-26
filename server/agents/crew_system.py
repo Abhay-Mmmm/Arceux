@@ -1,247 +1,264 @@
 """
 Arceux Agentic System - Specialized SOC Agents
+Signal-type routed, per-agent API keys, output-limited.
 """
 
 import os
 import time
 from datetime import datetime, timezone
 from crewai import Agent, Task, Crew, Process
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple, Optional
+
 from models import DetectionSignal
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# LLM Initialisation (Groq via LiteLLM)
+# Configuration
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-groq_llm = None
-_api_key = os.getenv("GROQ_API_KEY")
-_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+_FALLBACK_KEY = os.getenv("GROQ_API_KEY")
+_MODEL_AGENTS = os.getenv("GROQ_MODEL_AGENTS", "llama-3.3-70b-versatile")
 
-if _api_key:
-    # CrewAI uses LiteLLM — pass a string in "provider/model" format
-    groq_llm = f"groq/{_model}"
-    print(f"Groq LLM for CrewAI initialised ({_model})")
-else:
-    print("GROQ_API_KEY not set — CrewAI agents will use fallback trace")
+_AGENT_KEYS: Dict[str, Optional[str]] = {
+    "Orchestrator Agent":        os.getenv("GROQ_API_KEY_ORCHESTRATOR") or _FALLBACK_KEY,
+    "Alert Handler Agent":       os.getenv("GROQ_API_KEY_ALERT_HANDLER") or _FALLBACK_KEY,
+    "Threat Analyzer Agent":     os.getenv("GROQ_API_KEY_THREAT_ANALYZER") or _FALLBACK_KEY,
+    "Root Cause Agent":          os.getenv("GROQ_API_KEY_ROOT_CAUSE") or _FALLBACK_KEY,
+    "Compliance Agent":          os.getenv("GROQ_API_KEY_COMPLIANCE") or _FALLBACK_KEY,
+    "Response Automation Agent": os.getenv("GROQ_API_KEY_RESPONSE") or _FALLBACK_KEY,
+}
+
+for _name, _key in _AGENT_KEYS.items():
+    if _key:
+        print(f"[AGENT] {_name} using key: {_key[:8]}...")
+    else:
+        print(f"[AGENT] {_name}: no key — template fallback active")
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 1️⃣ Orchestrator Agent (The Coordinator)
+# Signal-Type Routing Table
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _llm_kwargs() -> Dict[str, Any]:
-    """Return llm kwarg dict if Groq is available, else empty dict."""
-    return {"llm": groq_llm} if groq_llm else {}
+_ROUTING: Dict[str, List[str]] = {
+    "BRUTE_FORCE":      ["Alert Handler Agent", "Threat Analyzer Agent", "Response Automation Agent"],
+    "SUSPICIOUS_LOGIN": ["Alert Handler Agent", "Threat Analyzer Agent", "Compliance Agent"],
+    "INSIDER_THREAT":   [
+        "Orchestrator Agent", "Alert Handler Agent", "Threat Analyzer Agent",
+        "Root Cause Agent", "Compliance Agent", "Response Automation Agent",
+    ],
+    "ANOMALOUS_ACCESS": ["Alert Handler Agent", "Root Cause Agent", "Compliance Agent"],
+    "DEFAULT":          ["Alert Handler Agent", "Threat Analyzer Agent"],
+}
+
+ALL_AGENT_NAMES = [
+    "Orchestrator Agent",
+    "Alert Handler Agent",
+    "Threat Analyzer Agent",
+    "Root Cause Agent",
+    "Compliance Agent",
+    "Response Automation Agent",
+]
 
 
-def create_orchestrator_agent() -> Agent:
-    """
-    Ensures the right agents run at the right time.
-    Role: Incident Commander & Coordinator.
-    """
-    return Agent(
-        role="Orchestrator Agent",
+def get_agents_for_signal(signal_type: str) -> List[str]:
+    """Return the agent names to run for this signal type."""
+    return _ROUTING.get(signal_type, _ROUTING["DEFAULT"])
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LLM Factory
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _make_llm(agent_name: str):
+    """Build an LLM instance for a specific agent using its dedicated key."""
+    key = _AGENT_KEYS.get(agent_name)
+    if not key:
+        return None
+    try:
+        from crewai import LLM
+        return LLM(model=f"groq/{_MODEL_AGENTS}", api_key=key)
+    except Exception as exc:
+        key_hint = (key[:8] + "...") if key else "missing"
+        print(
+            f"[WARN] _make_llm({agent_name!r}): crewai.LLM unavailable "
+            f"(key={key_hint}, model=groq/{_MODEL_AGENTS}). "
+            f"Falling back to string format — per-agent key WILL NOT be used. "
+            f"Reason: {exc}"
+        )
+        return f"groq/{_MODEL_AGENTS}"
+
+
+def _llm_kwargs(agent_name: str) -> Dict[str, Any]:
+    llm = _make_llm(agent_name)
+    return {"llm": llm} if llm else {}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Agent + Task Factories
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _build_orchestrator(signal: DetectionSignal) -> Tuple[Agent, Task]:
+    name = "Orchestrator Agent"
+    agent = Agent(
+        role=name,
         goal="Coordinate the incident response lifecycle and manage global incident context",
-        backstory="""You are the SOC Incident Commander. You do not analyze raw logs yourself;
-        instead, you direct your team of specialized agents. You ensure no steps are skipped,
-        resources are not wasted, and the final output is a cohesive incident narrative.
-        You see the big picture.""",
-        verbose=True,
+        backstory="SOC Incident Commander. Direct the team efficiently. See the big picture.",
+        verbose=False,
         allow_delegation=True,
-        **_llm_kwargs()
+        max_iter=1,
+        memory=False,
+        **_llm_kwargs(name),
     )
+    task = Task(
+        description=(
+            f"Incident for User: {signal.user}, Type: {signal.signal_type}. "
+            "Determine scope and which agents are needed."
+        ),
+        agent=agent,
+        expected_output=(
+            "Max 60 words. JSON with keys: incident_id, priority, assigned_agents, coordination_notes"
+        ),
+    )
+    return agent, task
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 2️⃣ Alert Handler Agent (Tier-1 Analyst)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def create_alert_handler_agent() -> Agent:
-    """
-    Reduces noise and decides what deserves attention.
-    Role: Tier-1 Triage & Correlation.
-    """
-    return Agent(
-        role="Alert Handler Agent",
+def _build_alert_handler(signal: DetectionSignal) -> Tuple[Agent, Task]:
+    name = "Alert Handler Agent"
+    agent = Agent(
+        role=name,
         goal="Triages incoming signals, reduces noise, and correlates related events",
-        backstory="""You are an expert Tier-1 Security Analyst. Your job is to filter out the noise.
-        You receive thousands of signals but only pass on the ones that matter. You look for
-        related events to group them into a single incident context, preventing alert fatigue.""",
-        verbose=True,
+        backstory="Expert Tier-1 Security Analyst. Filter noise, extract signal. Group related events.",
+        verbose=False,
         allow_delegation=False,
-        **_llm_kwargs()
+        max_iter=1,
+        memory=False,
+        **_llm_kwargs(name),
     )
+    task = Task(
+        description=(
+            f"Review {len(signal.events)} events for User: {signal.user} "
+            f"(Signal: {signal.signal_type}). Extract entities. Correlate and filter noise."
+        ),
+        agent=agent,
+        expected_output=(
+            "Max 80 words. Bullet points only: severity, deduplicated_count, top_indicators, noise_assessment"
+        ),
+    )
+    return agent, task
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 3️⃣ Threat Analyzer Agent (Threat Understanding)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def create_threat_analyzer_agent() -> Agent:
-    """
-    Understands WHAT kind of attack is happening.
-    Role: Threat Classification & MITRE Mapping.
-    """
-    return Agent(
-        role="Threat Analyzer Agent",
+def _build_threat_analyzer(signal: DetectionSignal) -> Tuple[Agent, Task]:
+    name = "Threat Analyzer Agent"
+    agent = Agent(
+        role=name,
         goal="Classify the behavior against MITRE ATT&CK and determine attacker intent",
-        backstory="""You are a Threat Intelligence Specialist. You don't just see 'failed login';
-        you see 'Brute Force (T1110)'. You understand the attacker's playbook. You identify
-        Tactics, Techniques, and Procedures (TTPs) and explain the intent behind the events.""",
-        verbose=True,
+        backstory="Threat Intelligence Specialist. Map behaviors to MITRE. Identify attacker TTPs.",
+        verbose=False,
         allow_delegation=False,
-        **_llm_kwargs()
+        max_iter=1,
+        memory=False,
+        **_llm_kwargs(name),
     )
+    task = Task(
+        description=(
+            f"Map {signal.signal_type} behavior for User: {signal.user} to MITRE ATT&CK. "
+            "Identify technique ID and attacker intent."
+        ),
+        agent=agent,
+        expected_output=(
+            "Max 100 words. MITRE tactic, technique ID, attacker_intent, "
+            "confidence_score, key_evidence (3 bullets max)"
+        ),
+    )
+    return agent, task
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 4️⃣ Root Cause Agent (Forensic Investigator)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def create_root_cause_agent() -> Agent:
-    """
-    Explains HOW and WHY the incident happened.
-    Role: Forensic Reconstruction.
-    """
-    return Agent(
-        role="Root Cause Agent",
+def _build_root_cause(signal: DetectionSignal) -> Tuple[Agent, Task]:
+    name = "Root Cause Agent"
+    agent = Agent(
+        role=name,
         goal="Reconstruct the attack timeline and identify the initial entry point",
-        backstory="""You are a Senior Forensic Investigator. You walk backwards through time.
-        You connect the dots between the alert and the initial breach. You identify the
-        'Blast Radius' of the attack and determine exactly how the adversary gained access.""",
-        verbose=True,
+        backstory="Senior Forensic Investigator. Walk backwards through time. Connect the dots.",
+        verbose=False,
         allow_delegation=False,
-        **_llm_kwargs()
+        max_iter=1,
+        memory=False,
+        **_llm_kwargs(name),
     )
+    task = Task(
+        description=(
+            f"Trace attack path for {signal.signal_type} incident affecting User: {signal.user}. "
+            "Identify root cause, blast radius, and affected assets."
+        ),
+        agent=agent,
+        expected_output=(
+            "Max 100 words. Timeline: initial_vector, propagation_steps (max 3), "
+            "affected_assets, blast_radius"
+        ),
+    )
+    return agent, task
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 5️⃣ Compliance Agent (Regulatory Gatekeeper)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def create_compliance_agent() -> Agent:
-    """
-    Ensures regulatory obligations are met.
-    Role: Legal & Policy Compliance.
-    """
-    return Agent(
-        role="Compliance Agent",
+def _build_compliance(signal: DetectionSignal) -> Tuple[Agent, Task]:
+    name = "Compliance Agent"
+    agent = Agent(
+        role=name,
         goal="Evaluate incident against GDPR, IRDAI, and SOC 2 requirements",
-        backstory="""You are the Governance, Risk, and Compliance (GRC) Officer. You don't care about
-        IP addresses; you care about PII, reporting deadlines (72h), and legal exposure.
-        You ensure every incident response aligns with regulatory frameworks.""",
-        verbose=True,
+        backstory="GRC Officer. Focus on PII, reporting deadlines (72h), and legal exposure.",
+        verbose=False,
         allow_delegation=False,
-        **_llm_kwargs()
+        max_iter=1,
+        memory=False,
+        **_llm_kwargs(name),
     )
+    task = Task(
+        description=(
+            f"Evaluate {signal.signal_type} incident for User: {signal.user} "
+            "against GDPR, IRDAI, and SOC 2. Determine reportability and deadlines."
+        ),
+        agent=agent,
+        expected_output=(
+            "Max 80 words. Bullet points: applicable_regulations, reportable (yes/no), "
+            "deadline, required_actions (2 max)"
+        ),
+    )
+    return agent, task
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 6️⃣ Response Automation Agent (Controlled SOAR)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def create_response_automation_agent() -> Agent:
-    """
-    Executes containment and remediation safely.
-    Role: Remediation Planner.
-    """
-    return Agent(
-        role="Response Automation Agent",
+def _build_response_automation(signal: DetectionSignal) -> Tuple[Agent, Task]:
+    name = "Response Automation Agent"
+    agent = Agent(
+        role=name,
         goal="Draft safe, effective containment and remediation plans",
-        backstory="""You are the SOAR (Security Orchestration, Automation, and Response) Specialist.
-        You define the counter-measures. You propose actions like 'Isolate Host', 'Revoke Token',
-        or 'Block IP'. You prioritize speed but strictly adhere to safety protocols to avoid business disruption.""",
-        verbose=True,
+        backstory="SOAR Specialist. Define counter-measures. Prioritize speed with safety protocols.",
+        verbose=False,
         allow_delegation=False,
-        **_llm_kwargs()
+        max_iter=1,
+        memory=False,
+        **_llm_kwargs(name),
     )
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Task Definitions
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def create_tasks(signal: DetectionSignal) -> List[Task]:
-    """Create the sequential workflow tasks."""
-    
-    # 1. Orchestration
-    orchestrator_task = Task(
-        description=f"""
-        Analyze the incoming signal context for User: {signal.user}, Type: {signal.signal_type}.
-        Determine the scope of the incident response required.
-        Identify which specialized agents are needed for this investigation.
-        """,
-        agent=create_orchestrator_agent(),
-        expected_output="Incident Response Plan outlining the investigation strategy."
+    task = Task(
+        description=(
+            f"Propose containment and remediation actions for {signal.signal_type} "
+            f"affecting User: {signal.user}. Distinguish immediate vs. short-term actions."
+        ),
+        agent=agent,
+        expected_output=(
+            "Max 80 words. Prioritized actions: immediate (1-2 items), "
+            "short_term (1-2 items), escalate_to_human (yes/no)"
+        ),
     )
+    return agent, task
 
-    # 2. Alert Handling
-    triage_task = Task(
-        description=f"""
-        Review the raw signal events (Count: {len(signal.events)}).
-        Extract critical entities (User, Asset, Location, IP).
-        Correlate these events into a single cohesive alert narrative.
-        Filter out potential false positives or irrelevant noise.
-        """,
-        agent=create_alert_handler_agent(),
-        expected_output="Structured Alert Summary with key entities and noise filtered out."
-    )
 
-    # 3. Threat Analysis
-    analysis_task = Task(
-        description=f"""
-        Map the observed behaviors to the MITRE ATT&CK framework.
-        Identify the specific Technique ID (e.g., T1078).
-        Explain the Attacker's Intent (e.g., Credential Access, Exfiltration).
-        Assign a confidence score to this classification.
-        """,
-        agent=create_threat_analyzer_agent(),
-        expected_output="Threat Classification including MITRE mapping and Attacker Intent."
-    )
-
-    # 4. Root Cause Analysis
-    forensics_task = Task(
-        description=f"""
-        Trace the attack path backwards from the alert.
-        Identify the likely Root Cause (e.g., Phishing, Misconfiguration, Compromised Credential).
-        Construct a timeline of the attack progression.
-        Define the Blast Radius (what other systems might be affected?).
-        """,
-        agent=create_root_cause_agent(),
-        expected_output="Forensic Timeline and Root Cause Analysis."
-    )
-
-    # 5. Compliance Check
-    compliance_task = Task(
-        description=f"""
-        Evaluate if this incident involves PII or sensitive data.
-        Check against GDPR and IRDAI reporting requirements.
-        Determine if this is a 'Reportable Incident'.
-        Calculate the reporting deadline (e.g., T-72 hours).
-        """,
-        agent=create_compliance_agent(),
-        expected_output="Compliance Assessment Report with deadlines and regulatory obligations."
-    )
-
-    # 6. Response Planning
-    response_task = Task(
-        description=f"""
-        Based on the analysis, propose specific Remediation Actions.
-        Prioritize actions by 'Immediate Containment' vs 'Long-term Eradication'.
-        Draft the formal Incident Note for the ticketing system (ServiceNow).
-        """,
-        agent=create_response_automation_agent(),
-        expected_output="Actionable Remediation Plan and Incident Ticket Draft."
-    )
-
-    return [
-        orchestrator_task,
-        triage_task,
-        analysis_task,
-        forensics_task,
-        compliance_task,
-        response_task
-    ]
+_AGENT_BUILDERS: Dict[str, Any] = {
+    "Orchestrator Agent":        _build_orchestrator,
+    "Alert Handler Agent":       _build_alert_handler,
+    "Threat Analyzer Agent":     _build_threat_analyzer,
+    "Root Cause Agent":          _build_root_cause,
+    "Compliance Agent":          _build_compliance,
+    "Response Automation Agent": _build_response_automation,
+}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -250,55 +267,47 @@ def create_tasks(signal: DetectionSignal) -> List[Task]:
 
 def run_agent_analysis(signal: DetectionSignal) -> Dict[str, Any]:
     """
-    Run the full Arceux Agentic System workflow.
-    Uses Groq LLM if GROQ_API_KEY is set; falls back to simulated trace otherwise.
-    Updates agent state in storage throughout execution.
+    Run the Arceux agent pipeline for the given signal.
+    Routes to a subset of agents based on signal type.
+    Only updates storage state for agents that actually ran.
     """
-    agent_names = [
-        "Orchestrator Agent",
-        "Alert Handler Agent",
-        "Threat Analyzer Agent",
-        "Root Cause Agent",
-        "Compliance Agent",
-        "Response Automation Agent",
-    ]
+    signal_type = signal.signal_type.value
+    selected_names = get_agents_for_signal(signal_type)
 
-    # Lazy import to avoid circular dependency
+    print(f"[CREW] Signal: {signal_type} → Running {len(selected_names)} agents: {selected_names}")
+
     try:
         from storage import storage as _storage
         _has_storage = True
     except Exception:
         _has_storage = False
 
-    def _set_all_status(status: str, extra: Dict[str, Any] = None):
-        if not _has_storage:
-            return
-        for name in agent_names:
-            updates = {"status": status}
-            if extra:
-                updates.update(extra)
-            _storage.update_agent_state(name, updates)
-
     start_time = time.time()
     start_iso = datetime.now(timezone.utc).isoformat()
 
-    _set_all_status("running", {"last_run": start_iso})
+    if _has_storage:
+        # Reset stale error states on agents NOT selected for this run (routing skipped them).
+        # Prevents non-participant agents from showing "error" from a previous failed run.
+        for name in ALL_AGENT_NAMES:
+            if name not in selected_names:
+                if _storage.agent_states.get(name, {}).get("status") == "error":
+                    _storage.update_agent_state(name, {"status": "idle"})
+        for name in selected_names:
+            _storage.update_agent_state(name, {"status": "running", "last_run": start_iso})
 
     try:
-        tasks = create_tasks(signal)
+        agents: List[Agent] = []
+        tasks: List[Task] = []
+        for name in selected_names:
+            agent, task = _AGENT_BUILDERS[name](signal)
+            agents.append(agent)
+            tasks.append(task)
 
         crew = Crew(
-            agents=[
-                create_orchestrator_agent(),
-                create_alert_handler_agent(),
-                create_threat_analyzer_agent(),
-                create_root_cause_agent(),
-                create_compliance_agent(),
-                create_response_automation_agent(),
-            ],
+            agents=agents,
             tasks=tasks,
             process=Process.sequential,
-            verbose=True,
+            verbose=False,
         )
 
         result = crew.kickoff()
@@ -307,7 +316,7 @@ def run_agent_analysis(signal: DetectionSignal) -> Dict[str, Any]:
 
         if _has_storage:
             trace_lines = [line.strip() for line in result_str.splitlines() if line.strip()][:8]
-            for name in agent_names:
+            for name in selected_names:
                 state = _storage.agent_states.get(name, {})
                 _storage.update_agent_state(name, {
                     "status": "completed",
@@ -319,17 +328,19 @@ def run_agent_analysis(signal: DetectionSignal) -> Dict[str, Any]:
 
         return {
             "success": True,
-            "agent_trace": agent_names,
+            "agent_trace": selected_names,
             "result": result_str,
             "signal_id": signal.signal_id,
         }
 
     except Exception as e:
         print(f"Agent workflow failed: {e}")
-        _set_all_status("error")
+        if _has_storage:
+            for name in selected_names:
+                _storage.update_agent_state(name, {"status": "error"})
         return {
             "success": False,
-            "agent_trace": agent_names,
+            "agent_trace": selected_names,
             "result": f"Alert generated by detection rule: {signal.signal_type}",
             "signal_id": signal.signal_id,
             "error": str(e),

@@ -8,7 +8,7 @@ import { ArrowRight, Send, Loader2, CheckCircle2, AlertTriangle, Shield } from '
 import { Modal } from '../components/ui/Modal';
 import { Alert } from '../types';
 import { cn } from '../lib/utils';
-import { fetchRealtimeMetrics, RealtimeComponent, fetchAlerts } from '../services/api';
+import { fetchRealtimeMetrics, fetchMetrics, RealtimeComponent, fetchAlerts } from '../services/api';
 
 // Dynamic Heartbeat Visualization - generates SVG path from history data
 const HeartbeatLine = ({ color, history }: { color: string; history?: number[] }) => {
@@ -89,12 +89,12 @@ const HeartbeatLine = ({ color, history }: { color: string; history?: number[] }
     );
 };
 
-const SEVERITY_DATA = [
-    { name: 'Crit', value: 2, color: 'hsl(0 84% 60%)' },
-    { name: 'High', value: 5, color: 'hsl(25 95% 53%)' },
-    { name: 'Med', value: 12, color: 'hsl(48 96% 53%)' },
-    { name: 'Low', value: 24, color: 'hsl(217 91% 60%)' },
-];
+const SEVERITY_COLORS = {
+    CRITICAL: 'hsl(0 84% 60%)',
+    HIGH:     'hsl(25 95% 53%)',
+    MEDIUM:   'hsl(48 96% 53%)',
+    LOW:      'hsl(217 91% 60%)',
+};
 
 const Dashboard: React.FC = () => {
     const [chatInput, setChatInput] = useState('');
@@ -154,36 +154,46 @@ const Dashboard: React.FC = () => {
         };
     }, []);
 
-    // Poll high-priority alerts from backend
+    // Live severity counts for the Threats bar chart
+    const [severityCounts, setSeverityCounts] = useState({ CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 });
+
+    // Single 5 s poller — fetches alerts + severity metrics in parallel to avoid
+    // two independent intervals hitting the backend on the same cadence.
     useEffect(() => {
         let isMounted = true;
 
-        const pollAlerts = async () => {
-            try {
-                // Fetch only high and critical alerts
-                const allAlerts = await fetchAlerts({ limit: 50 });
-                if (isMounted) {
-                    const highPriority = allAlerts.filter(a => ['critical', 'high'].includes(a.severity));
-                    setLiveAlerts(highPriority);
-                    setAlertsLoading(false);
-                }
-            } catch (err) {
-                console.warn('Failed to fetch alerts, using mock data');
-                setAlertsLoading(false);
+        const poll = async () => {
+            const [alertsResult, metricsResult] = await Promise.allSettled([
+                fetchAlerts({ limit: 50 }),
+                fetchMetrics(),
+            ]);
+
+            if (!isMounted) return;
+
+            if (alertsResult.status === 'fulfilled') {
+                const highPriority = alertsResult.value.filter(
+                    a => ['critical', 'high'].includes(a.severity)
+                );
+                setLiveAlerts(highPriority);
+            }
+            setAlertsLoading(false);
+
+            if (metricsResult.status === 'fulfilled') {
+                setSeverityCounts(metricsResult.value.alerts_by_severity);
             }
         };
 
-        // Initial fetch
-        pollAlerts();
-
-        // Poll every 5 seconds for new alerts
-        const interval = setInterval(pollAlerts, 5000);
-
-        return () => {
-            isMounted = false;
-            clearInterval(interval);
-        };
+        poll();
+        const id = setInterval(poll, 5000);
+        return () => { isMounted = false; clearInterval(id); };
     }, []);
+
+    const severityChartData = useMemo(() => [
+        { name: 'Crit', value: severityCounts.CRITICAL, color: SEVERITY_COLORS.CRITICAL },
+        { name: 'High', value: severityCounts.HIGH,     color: SEVERITY_COLORS.HIGH     },
+        { name: 'Med',  value: severityCounts.MEDIUM,   color: SEVERITY_COLORS.MEDIUM   },
+        { name: 'Low',  value: severityCounts.LOW,      color: SEVERITY_COLORS.LOW      },
+    ], [severityCounts]);
 
     const handleRefresh = useCallback(() => {
         setIsRefreshing(true);
@@ -548,15 +558,15 @@ const handleSystemCheck = () => {
       </div>
 
                 <div className="col-span-3 row-span-5 flex flex-col min-h-0">
-                    <Card title="Threats" className="flex-1 min-h-0 overflow-hidden" noPadding>
+                    <Card title="Threat Severity" className="flex-1 min-h-0 overflow-hidden" noPadding>
                         <div className="h-full w-full p-2">
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={SEVERITY_DATA} margin={{ top: 10, right: 10, left: -25, bottom: 0 }} barSize={35}>
+                                <BarChart data={severityChartData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }} barSize={35}>
                                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                                     <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={9} tickLine={false} axisLine={false} dy={5} />
-                                    <YAxis stroke="hsl(var(--muted-foreground))" fontSize={9} tickLine={false} axisLine={false} />
-                                    <Bar dataKey="value" radius={[3, 3, 0, 0]}>
-                                        {SEVERITY_DATA.map((entry, index) => (
+                                    <YAxis stroke="hsl(var(--muted-foreground))" fontSize={9} tickLine={false} axisLine={false} allowDecimals={false} />
+                                    <Bar dataKey="value" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+                                        {severityChartData.map((entry, index) => (
                                             <Cell key={`cell-${index}`} fill={entry.color} />
                                         ))}
                                     </Bar>

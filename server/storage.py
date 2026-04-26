@@ -22,6 +22,8 @@ _AGENT_NAMES = [
 class ArceuxStorage:
     """Thread-safe in-memory storage. No disk I/O — always starts clean."""
 
+    PIPELINE_COOLDOWN_SECONDS: int = 15
+
     def __init__(self):
         # In-memory stores
         self.logs: List[Dict[str, Any]] = []
@@ -46,6 +48,10 @@ class ArceuxStorage:
             }
             for name in _AGENT_NAMES
         }
+
+        # Pipeline rate limiting
+        self.last_pipeline_run: float = 0.0
+        self.pipeline_running: bool = False
 
         # Thread safety
         self._lock = Lock()
@@ -189,11 +195,13 @@ class ArceuxStorage:
             }
 
     def clear_all(self) -> None:
-        """Clear all in-memory data."""
+        """Clear all in-memory data and reset pipeline rate-limit state."""
         with self._lock:
             self.logs.clear()
             self.signals.clear()
             self.alerts.clear()
+            self.pipeline_running = False
+            self.last_pipeline_run = 0.0
 
 
 # Global storage instance
