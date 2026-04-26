@@ -9,6 +9,8 @@ import { Modal } from '../components/ui/Modal';
 import { Alert } from '../types';
 import { cn } from '../lib/utils';
 import { fetchRealtimeMetrics, fetchMetrics, RealtimeComponent, fetchAlerts } from '../services/api';
+import ReactMarkdown from 'react-markdown';
+
 
 // Dynamic Heartbeat Visualization - generates SVG path from history data
 const HeartbeatLine = ({ color, history }: { color: string; history?: number[] }) => {
@@ -98,7 +100,7 @@ const SEVERITY_COLORS = {
 
 const Dashboard: React.FC = () => {
     const [chatInput, setChatInput] = useState('');
-    const [messages, setMessages] = useState<{ role: 'user' | 'ai', content: React.ReactNode }[]>([
+    const [messages, setMessages] = useState<{ role: 'user' | 'ai', content: JSX.Element | string }[]>([
         { role: 'ai', content: <>Checking system logs... Detected anomalous root access attempt on <strong>db-shard-04</strong>. Suggest immediate isolation.</> }
     ]);
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -269,28 +271,32 @@ const handleSystemCheck = () => {
     };
 
     const handleQuickAction = async (action: string) => {
-        // Show loading
-        setMessages(prev => [...prev, {
-            role: 'ai',
-            content: <>Analyzing<Loader2 className="h-3 w-3 animate-spin inline ml-1" />...</>
-        }]);
+        const labelMap: Record<string, string> = {
+            explain_last: 'Explain last alert',
+            threat_summary: 'Threat summary',
+            recommend_actions: 'Recommend actions',
+            system_status: 'System status',
+        };
+
+        setMessages(prev => [
+            ...prev,
+            { role: 'user' as const, content: labelMap[action] ?? action },
+            {
+                role: 'ai' as const,
+                content: <>Analyzing<Loader2 className="h-3 w-3 animate-spin inline ml-1" />...</>
+            }
+        ]);
 
         try {
             const response = await fetch('http://localhost:8000/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: '',
-                    quick_action: action
-                })
+                body: JSON.stringify({ message: '', quick_action: action })
             });
 
             const data = await response.json();
-
-            // Add 1 second delay for realistic feel
             await new Promise(resolve => setTimeout(resolve, 1000));
 
-            // Replace loading with response
             setMessages(prev => {
                 const msgs = [...prev];
                 msgs[msgs.length - 1] = { role: 'ai', content: data.response };
@@ -307,8 +313,8 @@ const handleSystemCheck = () => {
                 };
                 return msgs;
             });
-        }
-    };
+    }
+  };
 
     const handleActionClick = (action: string) => {
         setMessages(prev => [...prev, {
@@ -439,19 +445,38 @@ const handleSystemCheck = () => {
                                                 : "bg-primary/10 text-foreground border border-primary/20"
                                         )}>
                                             {typeof msg.content === 'string' ? (
-                                                // Format markdown-style text
-                                                <div dangerouslySetInnerHTML={{
-                                                    __html: msg.content
-                                                        // Headers (## text -> bold larger text)
-                                                        .replace(/^## (.+)$/gm, '<div class="font-bold text-[13px] mt-2 mb-1">$1</div>')
-                                                        .replace(/^### (.+)$/gm, '<div class="font-semibold text-[12px] mt-1 mb-0.5">$1</div>')
-                                                        // Bold (**text** -> <strong>)
-                                                        .replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold">$1</strong>')
-                                                        // Code (`text` -> <code>)
-                                                        .replace(/`([^`]+)`/g, '<code class="bg-muted/50 px-1 py-0.5 rounded text-[10px] font-mono">$1</code>')
-                                                        // Line breaks
-                                                        .replace(/\n/g, '<br/>')
-                                                }} />
+                                                <ReactMarkdown
+                                                    components={{
+                                                        h2: ({ children }: { children?: React.ReactNode }) => (
+                                                            <div className="font-bold text-[13px] mt-2 mb-1">{children}</div>
+                                                        ),
+                                                        h3: ({ children }: { children?: React.ReactNode }) => (
+                                                            <div className="font-semibold text-[12px] mt-1 mb-0.5">{children}</div>
+                                                        ),
+                                                        strong: ({ children }: { children?: React.ReactNode }) => (
+                                                            <strong className="font-semibold">{children}</strong>
+                                                        ),
+                                                        code: ({ children }: { children?: React.ReactNode }) => (
+                                                            <code className="bg-muted/50 px-1 py-0.5 rounded text-[10px] font-mono">
+                                                                {children}
+                                                            </code>
+                                                        ),
+                                                        ul: ({ children }: { children?: React.ReactNode }) => (
+                                                            <ul className="list-disc list-inside space-y-0.5 my-1">{children}</ul>
+                                                        ),
+                                                        ol: ({ children }: { children?: React.ReactNode }) => (
+                                                            <ol className="list-decimal list-inside space-y-0.5 my-1">{children}</ol>
+                                                        ),
+                                                        li: ({ children }: { children?: React.ReactNode }) => (
+                                                            <li className="text-[11px]">{children}</li>
+                                                        ),
+                                                        p: ({ children }: { children?: React.ReactNode }) => (
+                                                            <p className="mb-1 last:mb-0">{children}</p>
+                                                        ),
+                                                    }}
+                                                >
+                                                    {msg.content}
+                                                </ReactMarkdown>
                                             ) : (
                                                 msg.content
                                             )}
