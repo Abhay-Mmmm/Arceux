@@ -77,8 +77,8 @@ function transformBackendAlert(backendAlert: BackendAlert): Alert {
     const severityConfidence: Record<string, number> = { critical: 95, high: 80, medium: 60, low: 40 };
     const confidence =
         backendAlert.metadata?.river_ml === true && backendAlert.metadata?.anomaly_score != null
-            ? Math.round(backendAlert.metadata.anomaly_score * 100)
-            : severityConfidence[mappedSeverity] ?? 75;
+            ? Math.max(0, Math.min(100, Math.round(backendAlert.metadata.anomaly_score * 100)))
+            : severityConfidence[mappedSeverity];
 
     // Build trace from agent_trace
     const trace = backendAlert.agent_trace.map((agent, index) => {

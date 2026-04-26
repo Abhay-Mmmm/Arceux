@@ -6,6 +6,8 @@ Each detection rule has a clear, testable condition.
 """
 
 import os
+import re
+import threading
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
@@ -43,8 +45,7 @@ class DetectionEngine:
 
         # River online ML anomaly detector (Rule 7)
         threshold = float(os.getenv("RIVER_ANOMALY_THRESHOLD", "0.75"))
-        _river = RiverAnomalyDetector(threshold)
-        self.river_detector = _river if _river._available else None
+        self.river_detector = RiverAnomalyDetector.try_create(threshold)
         if self.river_detector is not None:
             print(f"[RIVER] Anomaly detector initialized (threshold={threshold}, cohorts=3)")
 
@@ -288,7 +289,14 @@ class RiverAnomalyDetector:
 
     def __init__(self, threshold: float = 0.75) -> None:
         self._threshold = threshold
+        # maxlen=200 caps memory per user; at >200 events/60 s the oldest timestamps
+        # are evicted, causing an undercount of user_event_rate — acceptable at this scale.
         self._event_rate_windows: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
+        self._locks: Dict[str, threading.Lock] = {
+            "admin_cohort":    threading.Lock(),
+            "service_cohort":  threading.Lock(),
+            "standard_cohort": threading.Lock(),
+        }
 
         try:
             from river.anomaly import HalfSpaceTrees
@@ -303,11 +311,17 @@ class RiverAnomalyDetector:
             self._models = {}
             print("[RIVER] WARNING: river not installed. ML anomaly detection disabled.")
 
+    @classmethod
+    def try_create(cls, threshold: float = 0.75) -> Optional["RiverAnomalyDetector"]:
+        """Return a configured detector if River is installed, else None."""
+        instance = cls(threshold)
+        return instance if instance._available else None
+
     def _get_cohort(self, username: str) -> str:
         u = username.lower()
-        if "admin" in u or "root" in u:
+        if re.search(r"\b(admin|root)\b", u):
             return "admin_cohort"
-        if "service" in u or "svc" in u:
+        if re.search(r"\b(service|svc)\b", u):
             return "service_cohort"
         return "standard_cohort"
 
@@ -336,12 +350,15 @@ class RiverAnomalyDetector:
         now = datetime.fromisoformat(log.timestamp.replace("Z", "+00:00"))
         cohort = self._get_cohort(log.user)
         features = self._extract_features(log, now)
-        model = self._models[cohort]
 
-        model.learn_one(features)
-        score: float = model.score_one(features)
+        with self._locks[cohort]:
+            self._models[cohort].learn_one(features)
+            score: float = self._models[cohort].score_one(features)
 
         if score >= self._threshold:
+            # Redact PII: show only the first 4 chars of the local part
+            local = log.user.split("@")[0]
+            user_display = local[:4] + "***"
             return DetectionSignal(
                 signal_id=str(uuid.uuid4()),
                 signal_type=SignalType.ANOMALOUS_ACCESS,
@@ -354,7 +371,7 @@ class RiverAnomalyDetector:
                     "cohort": cohort,
                     "anomaly_score": round(score, 3),
                     "risk_reason": (
-                        f"River ML anomaly detected for user {log.user} "
+                        f"River ML anomaly detected for user {user_display} "
                         f"(cohort: {cohort}, score: {score:.3f})"
                     ),
                 },

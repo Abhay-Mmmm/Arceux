@@ -1,6 +1,6 @@
 # Arceux — Implementation Overview
 
-**Version:** 0.9.1 (Day 2 — Dynamic Confidence Scoring)  
+**Version:** 0.9.1 (River branch — base PR target was 0.7.0; incremented on this branch for River ML anomaly detection + dynamic confidence scoring additions)  
 **Last Updated:** 2026-04-26  
 **Status:** Active Development — Early Prototype
 
@@ -181,7 +181,7 @@ Online anomaly detection using River's `HalfSpaceTrees` (HST). Runs on every inc
 | `standard_cohort` | all other users (default) |
 
 **HalfSpaceTrees config** (identical for all 3 cohorts):
-```
+```text
 n_trees=10, height=8, window_size=50, seed=42
 ```
 
