@@ -72,6 +72,14 @@ function transformBackendAlert(backendAlert: BackendAlert): Alert {
     const firstEvent = backendAlert.raw_events?.[0] || {};
     const asset = firstEvent.asset || backendAlert.metadata?.asset || 'unknown';
 
+    // Confidence: River ML score takes priority; fall back to severity-based estimate
+    const mappedSeverity = severityMap[backendAlert.severity] || 'medium';
+    const severityConfidence: Record<string, number> = { critical: 95, high: 80, medium: 60, low: 40 };
+    const confidence =
+        backendAlert.metadata?.river_ml === true && backendAlert.metadata?.anomaly_score != null
+            ? Math.max(0, Math.min(100, Math.round(backendAlert.metadata.anomaly_score * 100)))
+            : severityConfidence[mappedSeverity];
+
     // Build trace from agent_trace
     const trace = backendAlert.agent_trace.map((agent, index) => {
         let action = 'Processed step';
@@ -106,12 +114,12 @@ function transformBackendAlert(backendAlert: BackendAlert): Alert {
 
     return {
         id: backendAlert.alert_id,
-        severity: severityMap[backendAlert.severity] || 'medium',
+        severity: mappedSeverity,
         title: backendAlert.threat_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
         description: backendAlert.explanation,
         timestamp: backendAlert.timestamp, // Return raw ISO timestamp, let UI format it
         status: (backendAlert.status as 'open' | 'investigating' | 'resolved') || 'open',
-        confidence: 95, // High confidence from AI agents
+        confidence,
         user: backendAlert.user,
         asset,
         recommendedActions,

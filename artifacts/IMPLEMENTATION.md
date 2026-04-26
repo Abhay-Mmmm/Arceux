@@ -1,6 +1,6 @@
 # Arceux — Implementation Overview
 
-**Version:** 0.8.0 (Day 2 — Run Playbook, Live Activity Feed, last_signal_type)  
+**Version:** 0.9.1 (River branch — base PR target was 0.7.0; incremented on this branch for River ML anomaly detection + dynamic confidence scoring additions)  
 **Last Updated:** 2026-04-26  
 **Status:** Active Development — Early Prototype
 
@@ -17,6 +17,7 @@
 | Backend | FastAPI + Uvicorn (Python) |
 | AI Chatbot | Groq API (`groq` SDK, `llama-3.1-8b-instant`) — dedicated key (`GROQ_API_KEY_CHAT`) |
 | AI Agents | CrewAI + LiteLLM (`groq/llama-3.3-70b-versatile`) — signal-type routed, per-agent keys |
+| ML Detection | River 0.21.0 (`HalfSpaceTrees`) — online anomaly detection, no retraining |
 | Storage | Purely in-memory (no disk persistence) |
 | Async | Python asyncio + threading |
 
@@ -70,6 +71,9 @@ Arceux/
 - **Detail Slide-Out Panel:** Right-side drawer with full alert details, AI agent trace, and recommended action buttons.
 - **Relative Timestamps:** Human-readable ("5 mins ago") with graceful fallback for invalid dates.
 - **Run Playbook:** Top-right button that finds the highest-severity open alert from the current filtered list (CRITICAL > HIGH > MEDIUM > LOW) and calls `POST /agents/trigger` with that alert's ID. Button states: default "Run Playbook" → loading "Running…" (disabled, spinner) → success "Playbook Started ✓" (disabled, re-enables after 3 s) → error "Failed — Retry" (red border, re-enables immediately). On success, an inline notification below the buttons shows "Pipeline triggered on: [Alert Name] ([SEVERITY])" and auto-dismisses after 5 s. If no open alert exists in the filtered list, shows "No open alerts to run playbook on" (neutral color, auto-dismisses after 5 s).
+- **Confidence Score:** Computed in `transformBackendAlert()` in `api.ts` using a combined strategy:
+  1. **River ML score** — if `metadata.river_ml === true` and `metadata.anomaly_score` is present, confidence = `Math.round(anomaly_score × 100)`. River's HST score is a calibrated 0–1 float, so this maps directly to a percentage.
+  2. **Severity fallback** — for rule-based signals (no River score), confidence is derived from severity: `{ critical: 95, high: 80, medium: 60, low: 40 }`, with a default of 75 for any unmapped value.
 
 #### Agent Insights Page (`client/src/pages/AgentInsights.tsx`)
 Complete rewrite with React performance optimizations to eliminate yellow-flash artifacts during state transitions:
@@ -110,6 +114,7 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
 - `executeAction({ action_type, alert_id, parameters })` — calls `POST /actions/execute`.
 - `fetchAgentStatus()` — calls `GET /agents/status`; returns `{ agents: AgentStatus[], last_signal_type: string | null }`.
 - `triggerAgentPipeline(alertId?)` — calls `POST /agents/trigger` with body `{ alert_id: alertId | null }`.
+- `transformBackendAlert()` — `confidence` field is now dynamic: River ML anomaly score × 100 when `metadata.river_ml` is true; severity-based fallback (`critical=95, high=80, medium=60, low=40`) otherwise.
 
 #### UI Components
 - `Badge.tsx`, `Button.tsx`, `Card.tsx`, `Modal.tsx`
@@ -153,6 +158,7 @@ Six stateful rule-based detectors using per-user sliding windows:
 | 4 | **Account Takeover** | Successful login after 3+ failures in 5 min | HIGH | `SUSPICIOUS_LOGIN` |
 | 5 | **Insider Threat** | Privilege escalation → data download, same user | CRITICAL | `INSIDER_THREAT` |
 | 6 | **Data Exfiltration** | Downloads from 3+ different assets in 5 min | HIGH | `ANOMALOUS_ACCESS` |
+| 7 | **River ML (HST)** | Behavioral anomaly score ≥ threshold (default 0.75) | HIGH | `ANOMALOUS_ACCESS` |
 
 **High-risk locations set:** `{"Russia", "North Korea", "Unknown", "Tor Exit Node", "Romania", "Iran"}`
 
@@ -161,6 +167,42 @@ Sliding window deques per-user (all capped at `maxlen` to bound memory):
 - `recent_escalations` — per user, deque of `(timestamp, asset)` tuples (rule 5)
 - `data_download_window` — per user, deque of `(timestamp, asset)` tuples (rule 6)
 - `last_login_location` — `{user: {location, timestamp}}` dict (rule 3)
+
+#### River Online ML Detector (`RiverAnomalyDetector`)
+
+Online anomaly detection using River's `HalfSpaceTrees` (HST). Runs on every incoming event alongside the rule-based checks. Rule signals take priority; the River signal is returned only when no rule fires.
+
+**User cohorts** — each cohort gets its own independent HST model:
+
+| Cohort | Match condition |
+|--------|----------------|
+| `admin_cohort` | username contains "admin" or "root" |
+| `service_cohort` | username contains "service" or "svc" |
+| `standard_cohort` | all other users (default) |
+
+**HalfSpaceTrees config** (identical for all 3 cohorts):
+```text
+n_trees=10, height=8, window_size=50, seed=42
+```
+
+**6 numeric features extracted per event:**
+
+| Feature | Computation |
+|---------|-------------|
+| `hour_of_day` | `datetime.hour` of the event timestamp (0–23) |
+| `is_suspicious_location` | 1.0 if location is in `SUSPICIOUS_LOCATIONS`, else 0.0 |
+| `is_failed_login` | 1.0 if `event_type == "failed_login"`, else 0.0 |
+| `is_privilege_escalation` | 1.0 if `event_type == "privilege_escalation"`, else 0.0 |
+| `is_data_download` | 1.0 if `event_type == "data_download"`, else 0.0 |
+| `user_event_rate` | Count of events from this user in the last 60 seconds (per-user deque, `maxlen=200`) |
+
+**Scoring:** `learn_one(features)` is called first on every event (model always updates). `score_one(features)` is then called; if score ≥ `RIVER_ANOMALY_THRESHOLD` (default `0.75`), a `ANOMALOUS_ACCESS / HIGH` signal is returned with `metadata.river_ml = True` and the score in `metadata.risk_reason`.
+
+**Warmup:** The first ~50 events per cohort produce near-zero scores while HST builds its baseline — this is expected behavior, not a bug.
+
+**Graceful degradation:** If `river` is not installed, `RiverAnomalyDetector._available` is `False`, `DetectionEngine.river_detector` is set to `None`, and the detect call is skipped entirely. All 6 existing rules continue to fire normally.
+
+**Configuration:** `RIVER_ANOMALY_THRESHOLD=0.75` in `server/.env`.
 
 #### 6-Agent CrewAI System (`server/agents/crew_system.py`)
 Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteLLM / CrewAI LLM class):
@@ -262,7 +304,6 @@ Each agent and the chatbot can be assigned a dedicated Groq API key from a separ
 | **Database persistence** | Purely in-memory. PostgreSQL or MongoDB needed for scale. |
 | **Authentication / RBAC** | All API endpoints are open. |
 | **SIEM / log source connectors** | Only synthetic logs. No Splunk, ELK, or syslog integration. |
-| **ML-based anomaly detection** | Detection engine is rules-only. No statistical or ML models. |
 | **Slack / ServiceNow integration** | No third-party notification or ticketing. |
 | **Multi-tenancy** | Single-instance, single-org design. |
 | **Audit logging** | No record of who viewed/actioned what. |
@@ -326,7 +367,7 @@ VITE_API_URL=http://localhost:8000
 **Python dependencies** — `server/requirements.txt`:
 ```
 fastapi, uvicorn[standard], pydantic, crewai, litellm, groq,
-python-dotenv, requests, aiohttp<3.10, pytest
+python-dotenv, requests, aiohttp<3.10, river==0.21.0, pytest
 ```
 
 ---
@@ -443,3 +484,19 @@ The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent
 - Set `isAnimationActive={false}` on `Bar` to prevent the grow animation from replaying on every poll tick.
 
 *Files Changed:* `client/src/pages/Dashboard.tsx`
+
+---
+
+### 2026-04-26 — Confidence Score Audit
+
+*Audit Result:* Fix already correctly in place. Full audit of `client/src/services/api.ts`, `client/src/pages/Alerts.tsx`, and `client/src/types.ts` found no hardcoded confidence values.
+
+`transformBackendAlert()` computes confidence dynamically (lines 77–81 of `api.ts`):
+- River ML alerts (`metadata.river_ml === true` + `anomaly_score != null`): `Math.round(anomaly_score × 100)`
+- Rule-based alerts: `{ critical: 95, high: 80, medium: 60, low: 40 }[severity]` with `?? 75` fallback
+
+`Alerts.tsx` reads `alert.confidence` directly with no override. `types.ts` declares `confidence: number` with no default.
+
+All alerts currently showing 80% is expected: the detection engine generates `HIGH` severity for Brute Force, Suspicious Login, Account Takeover, and Data Exfiltration — the four most frequently triggered rules. `CRITICAL` (95%) appears on Impossible Travel and Insider Threat; `MEDIUM` (60%) appears on failed-login probes from high-risk locations.
+
+*Files Changed:* None

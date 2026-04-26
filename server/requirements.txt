@@ -15,5 +15,8 @@ python-dotenv
 requests
 aiohttp<3.10
 
+# ML / Anomaly Detection
+river==0.23.0
+
 # Development
 pytest
