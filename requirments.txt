@@ -15,7 +15,6 @@ groq
 # Utilities
 requests
 aiohttp
-react-markdown
 
 # Development
 pytest

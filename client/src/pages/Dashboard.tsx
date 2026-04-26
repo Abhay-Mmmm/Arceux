@@ -287,8 +287,8 @@ const Dashboard: React.FC = () => {
                 };
                 return msgs;
             });
-        }
-    };  //
+    }
+  };
 
     const handleActionClick = (action: string) => {
         setMessages(prev => [...prev, {
