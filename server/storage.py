@@ -52,6 +52,7 @@ class ArceuxStorage:
         # Pipeline rate limiting
         self.last_pipeline_run: float = 0.0
         self.pipeline_running: bool = False
+        self.last_signal_type: Optional[str] = None
 
         # Thread safety
         self._lock = Lock()
@@ -202,6 +203,7 @@ class ArceuxStorage:
             self.alerts.clear()
             self.pipeline_running = False
             self.last_pipeline_run = 0.0
+            self.last_signal_type = None
 
 
 # Global storage instance

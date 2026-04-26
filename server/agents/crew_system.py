@@ -294,6 +294,7 @@ def run_agent_analysis(signal: DetectionSignal) -> Dict[str, Any]:
                     _storage.update_agent_state(name, {"status": "idle"})
         for name in selected_names:
             _storage.update_agent_state(name, {"status": "running", "last_run": start_iso})
+        _storage.last_signal_type = signal_type
 
     try:
         agents: List[Agent] = []
@@ -313,6 +314,11 @@ def run_agent_analysis(signal: DetectionSignal) -> Dict[str, Any]:
         result = crew.kickoff()
         elapsed_ms = int((time.time() - start_time) * 1000)
         result_str = str(result)
+
+        print(f"\n[CREW OUTPUT] Signal: {signal_type} | Elapsed: {elapsed_ms}ms")
+        print("-" * 60)
+        print(result_str[:1200] if len(result_str) > 1200 else result_str)
+        print("-" * 60)
 
         if _has_storage:
             trace_lines = [line.strip() for line in result_str.splitlines() if line.strip()][:8]

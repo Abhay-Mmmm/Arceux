@@ -1,6 +1,6 @@
 # Arceux — Implementation Overview
 
-**Version:** 0.7.0 (Day 2 — UI Anti-Flicker, Real-Time Severity Chart, Stale-State Reset)  
+**Version:** 0.8.0 (Day 2 — Run Playbook, Live Activity Feed, last_signal_type)  
 **Last Updated:** 2026-04-26  
 **Status:** Active Development — Early Prototype
 
@@ -69,11 +69,12 @@ Arceux/
 - **Export CSV:** Exports filtered alerts to a dated CSV file.
 - **Detail Slide-Out Panel:** Right-side drawer with full alert details, AI agent trace, and recommended action buttons.
 - **Relative Timestamps:** Human-readable ("5 mins ago") with graceful fallback for invalid dates.
+- **Run Playbook:** Top-right button that finds the highest-severity open alert from the current filtered list (CRITICAL > HIGH > MEDIUM > LOW) and calls `POST /agents/trigger` with that alert's ID. Button states: default "Run Playbook" → loading "Running…" (disabled, spinner) → success "Playbook Started ✓" (disabled, re-enables after 3 s) → error "Failed — Retry" (red border, re-enables immediately). On success, an inline notification below the buttons shows "Pipeline triggered on: [Alert Name] ([SEVERITY])" and auto-dismisses after 5 s. If no open alert exists in the filtered list, shows "No open alerts to run playbook on" (neutral color, auto-dismisses after 5 s).
 
 #### Agent Insights Page (`client/src/pages/AgentInsights.tsx`)
 Complete rewrite with React performance optimizations to eliminate yellow-flash artifacts during state transitions:
 
-- **Anti-Flicker Polling:** `setAgents` uses JSON diff (`JSON.stringify` comparison) before applying updates — if the server returns identical data, the previous state reference is preserved and no re-render occurs.
+- **Anti-Flicker Polling:** `setAgents` uses structural comparator (`compareAgentLists`) before applying updates — if the server returns identical data, the previous state reference is preserved and no re-render occurs.
 - **Stable `useCallback`:** `loadAgents` is defined with an empty dependency array `[]` and uses an `everLoadedRef` (`useRef(false)`) to distinguish first-load failures from transient polling errors. The polling `setInterval` never restarts unnecessarily.
 - **`React.memo` Components:** `AgentCard` and `PipelineNode` are wrapped in `React.memo` — child components only re-render when their own props actually change.
 - **Tiered Error States:**
@@ -91,15 +92,24 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
 
 - **Agent Pipeline Visualization:** 6 agents shown as connected boxes with live status indicators polled every 3 seconds.
 - **Agent Detail Cards:** Expanded detail with last trace, task count, avg execution time, last run timestamp.
-- **Run on Latest Alert:** Calls `POST /agents/trigger` to queue a pipeline run.
-- **`isAnyRunning` and `selected`** derived via `useMemo` to avoid redundant computation on each render.
+- **`selected`** derived via `useMemo` to avoid redundant computation on each render.
+- **Live Activity Feed Bar:** Full-width horizontal status bar directly below the page title. Derives its state entirely from the existing 3 s `GET /agents/status` poll (zero additional API calls). Four states:
+
+  | State | Trigger | Display |
+  |-------|---------|---------|
+  | Active | Any agent `status === "running"` | Amber pulsing dot — "Pipeline active — [SIGNAL TYPE] signal — [Agent] is analyzing…" |
+  | Completed | All idle/completed, any `last_run` within 30 s | Emerald ✓ — "Last run completed Xs ago — [SIGNAL TYPE] — N agents ran" |
+  | Error | Any agent `status === "error"` | Red ✗ — "Last run encountered an error — [Agent] failed" |
+  | Idle | All agents idle, no recent run | Zinc dot — "Pipeline idle — waiting for next signal" |
+
+  Signal type shown via `last_signal_type` field from `GET /agents/status` response. "Run on Latest Alert" button removed — pipeline is triggered automatically by the backend or via the Alerts page "Run Playbook" button.
 
 #### API Service Layer (`client/src/services/api.ts`)
 - `fetchAlerts()`, `fetchAlertById()`, `fetchMetrics()`, `fetchRealtimeMetrics()`, `checkHealth()`, `ingestLog()`.
 - `updateAlertStatus(alertId, status)` — calls `PATCH /alerts/{id}/status`.
 - `executeAction({ action_type, alert_id, parameters })` — calls `POST /actions/execute`.
-- `fetchAgentStatus()` — calls `GET /agents/status`.
-- `triggerAgentPipeline()` — calls `POST /agents/trigger`.
+- `fetchAgentStatus()` — calls `GET /agents/status`; returns `{ agents: AgentStatus[], last_signal_type: string | null }`.
+- `triggerAgentPipeline(alertId?)` — calls `POST /agents/trigger` with body `{ alert_id: alertId | null }`.
 
 #### UI Components
 - `Badge.tsx`, `Button.tsx`, `Card.tsx`, `Modal.tsx`
@@ -116,8 +126,8 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
 | `GET /alerts/{id}` | ✅ Single alert by ID |
 | `PATCH /alerts/{id}/status` | ✅ Update alert status (open/investigating/resolved) |
 | `POST /actions/execute` | ✅ Execute response action (block_ip, reset_credentials) |
-| `GET /agents/status` | ✅ All 6 agent states with stats |
-| `POST /agents/trigger` | ✅ Queue pipeline run from latest alert |
+| `GET /agents/status` | ✅ All 6 agent states with stats + `last_signal_type` top-level field |
+| `POST /agents/trigger` | ✅ Queue pipeline run; optional body `{ "alert_id": "..." }` — if provided runs on that alert, otherwise latest |
 | `GET /metrics` | ✅ Summary (totals, by-severity, recent activity) |
 | `GET /metrics/realtime` | ✅ Component health + latency history |
 | `POST /chat` | ✅ Free-form or quick-action chat (Groq + template fallback) |
@@ -203,6 +213,7 @@ Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteL
 - `blocked_ips: Set[str]`, `flagged_users: Set[str]` for action tracking.
 - `agent_states: Dict[str, Dict]` — per-agent state (status, last_run, tasks_completed, execution_count, total_execution_time_ms, last_execution_trace).
 - Pipeline rate-limit fields: `last_pipeline_run: float = 0.0`, `pipeline_running: bool = False`, `PIPELINE_COOLDOWN_SECONDS: int = 15`.
+- `last_signal_type: Optional[str] = None` — set by `crew_system.py` at the start of each pipeline run; exposed via `GET /agents/status` to power the Agent Insights activity feed. Reset to `None` on `POST /debug/clear`.
 - Lock-based synchronization on all concurrent access.
 
 #### Data Models (`server/models.py`)

@@ -332,10 +332,15 @@ export interface AgentStatus {
     last_execution_trace: string[];
 }
 
+export interface AgentStatusResponse {
+    agents: AgentStatus[];
+    last_signal_type: string | null;
+}
+
 /**
  * Fetch the current status of all AI agents
  */
-export async function fetchAgentStatus(): Promise<AgentStatus[]> {
+export async function fetchAgentStatus(): Promise<AgentStatusResponse> {
     try {
         const response = await fetch(`${API_BASE_URL}/agents/status`);
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -347,13 +352,14 @@ export async function fetchAgentStatus(): Promise<AgentStatus[]> {
 }
 
 /**
- * Trigger the agent pipeline on the most recent alert
+ * Trigger the agent pipeline on a specific alert (or the latest alert if no ID given)
  */
-export async function triggerAgentPipeline(): Promise<{ success: boolean; message: string }> {
+export async function triggerAgentPipeline(alertId?: string): Promise<{ success: boolean; message: string }> {
     try {
         const response = await fetch(`${API_BASE_URL}/agents/trigger`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ alert_id: alertId ?? null }),
         });
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         return await response.json();

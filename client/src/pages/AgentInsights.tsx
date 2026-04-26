@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { fetchAgentStatus, triggerAgentPipeline, AgentStatus } from '../services/api';
+import { fetchAgentStatus, AgentStatus } from '../services/api';
 import {
     Target, ShieldAlert, BrainCircuit, GitBranch, FileText, Zap,
-    Activity, Cpu, RefreshCw, Play, Clock, CheckCircle, Loader2, WifiOff,
+    Cpu, RefreshCw, Clock, CheckCircle, WifiOff,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -262,12 +262,11 @@ const PipelineNode = React.memo(function PipelineNode({ agent, isSelected, onSel
 
 const AgentInsights: React.FC = () => {
     const [agents, setAgents] = useState<AgentStatus[]>([]);
+    const [lastSignalType, setLastSignalType] = useState<string | null>(null);
     const [initialLoading, setInitialLoading] = useState(true);
     const [hardError, setHardError] = useState<string | null>(null);
     const [pollFailed, setPollFailed] = useState(false);
     const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-    const [triggering, setTriggering] = useState(false);
-    const [triggerMsg, setTriggerMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
     const everLoadedRef = useRef(false);
 
@@ -275,7 +274,8 @@ const AgentInsights: React.FC = () => {
         try {
             const data = await fetchAgentStatus();
             // Only update state when rendered fields actually changed — prevents re-render flicker
-            setAgents(prev => compareAgentLists(prev, data) ? prev : data);
+            setAgents(prev => compareAgentLists(prev, data.agents) ? prev : data.agents);
+            setLastSignalType(data.last_signal_type);
             everLoadedRef.current = true;
             setPollFailed(false);
         } catch (err) {
@@ -295,42 +295,48 @@ const AgentInsights: React.FC = () => {
         return () => clearInterval(id);
     }, [loadAgents]);
 
-    const isAnyRunning = useMemo(() => agents.some(a => a.status === 'running'), [agents]);
     const selected = useMemo(() => agents.find(a => a.name === selectedAgent) ?? null, [agents, selectedAgent]);
 
     const handleSelectAgent = useCallback((name: string) => {
         setSelectedAgent(prev => (prev === name ? null : name));
     }, []);
 
-    const handleTrigger = async () => {
-        setTriggering(true);
-        setTriggerMsg(null);
-        try {
-            const res = await triggerAgentPipeline();
-            if (res.success) {
-                setTriggerMsg({ text: 'Pipeline queued ✓', ok: true });
-                loadAgents();
-                setTimeout(() => setTriggerMsg(null), 2000);
-            } else {
-                setTriggerMsg({ text: res.message, ok: false });
-                setTimeout(() => setTriggerMsg(null), 4000);
+    // Derive pipeline activity state from current agent states
+    type ActivityState =
+        | { kind: 'idle' }
+        | { kind: 'active'; agentName: string }
+        | { kind: 'completed'; secondsAgo: number; agentsRan: number }
+        | { kind: 'error'; agentName: string };
+
+    const pipelineActivity = useMemo((): ActivityState => {
+        const runningAgent = agents.find(a => a.status === 'running');
+        if (runningAgent) return { kind: 'active', agentName: runningAgent.name };
+
+        const errorAgent = agents.find(a => a.status === 'error');
+        if (errorAgent) return { kind: 'error', agentName: errorAgent.name };
+
+        const now = Date.now();
+        const recentAgent = agents
+            .filter(a => a.last_run !== null)
+            .sort((a, b) => new Date(b.last_run!).getTime() - new Date(a.last_run!).getTime())[0];
+
+        if (recentAgent && recentAgent.last_run) {
+            const secondsAgo = Math.floor((now - new Date(recentAgent.last_run).getTime()) / 1000);
+            if (secondsAgo < 30) {
+                const agentsRan = agents.filter(a => a.status === 'completed').length;
+                return { kind: 'completed', secondsAgo, agentsRan };
             }
-        } catch (err) {
-            setTriggerMsg({
-                text: err instanceof Error ? err.message : 'Failed — is backend running?',
-                ok: false,
-            });
-            setTimeout(() => setTriggerMsg(null), 4000);
-        } finally {
-            setTriggering(false);
         }
-    };
+
+        return { kind: 'idle' };
+    }, [agents]);
 
     // ── Skeleton (first load only) ──────────────────────────────────────────
     if (initialLoading) {
         return (
             <div className="h-full flex flex-col gap-4">
                 <div className="shrink-0 h-8 w-48 bg-muted rounded animate-pulse" />
+                <div className="shrink-0 h-8 bg-card border border-border/50 rounded-lg animate-pulse" />
                 <div className="shrink-0 bg-card border border-border rounded-lg p-4 h-24 animate-pulse" />
                 <div className="flex-1 grid grid-cols-6 gap-3">
                     {Array.from({ length: 6 }).map((_, i) => (
@@ -376,28 +382,56 @@ const AgentInsights: React.FC = () => {
                         )}
                     </p>
                 </div>
-                <div className="flex items-center gap-3">
-                    {triggerMsg && (
-                        <span className={cn('text-xs font-medium', triggerMsg.ok ? 'text-emerald-400' : 'text-red-400')}>
-                            {triggerMsg.text}
+            </div>
+
+            {/* Activity bar */}
+            <div className="shrink-0 flex items-center gap-2.5 px-3 py-2 rounded-lg bg-card border border-border/50 text-xs">
+                {pipelineActivity.kind === 'active' && (
+                    <>
+                        <span className="relative flex h-2 w-2 shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
                         </span>
-                    )}
-                    <button
-                        onClick={handleTrigger}
-                        disabled={triggering || isAnyRunning}
-                        className={cn(
-                            'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border',
-                            isAnyRunning
-                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 cursor-not-allowed'
-                                : 'bg-primary/10 border-primary/30 text-primary hover:bg-primary/20 disabled:opacity-50',
+                        <span className="text-amber-300 font-medium">Pipeline active</span>
+                        {lastSignalType && (
+                            <span className="text-muted-foreground">
+                                — {lastSignalType.replace(/_/g, ' ')} signal
+                            </span>
                         )}
-                    >
-                        {triggering    ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> :
-                         isAnyRunning ? <Activity className="h-3.5 w-3.5" /> :
-                                        <Play className="h-3.5 w-3.5" />}
-                        {isAnyRunning ? 'Pipeline Running…' : 'Run on Latest Alert'}
-                    </button>
-                </div>
+                        <span className="text-muted-foreground">
+                            — {pipelineActivity.agentName} is analyzing…
+                        </span>
+                    </>
+                )}
+                {pipelineActivity.kind === 'completed' && (
+                    <>
+                        <span className="text-emerald-500 shrink-0">✓</span>
+                        <span className="text-emerald-400 font-medium">
+                            Last run completed {pipelineActivity.secondsAgo}s ago
+                        </span>
+                        {lastSignalType && (
+                            <span className="text-muted-foreground">
+                                — {lastSignalType.replace(/_/g, ' ')}
+                            </span>
+                        )}
+                        <span className="text-muted-foreground">
+                            — {pipelineActivity.agentsRan} agent{pipelineActivity.agentsRan !== 1 ? 's' : ''} ran
+                        </span>
+                    </>
+                )}
+                {pipelineActivity.kind === 'error' && (
+                    <>
+                        <span className="text-red-400 shrink-0">✗</span>
+                        <span className="text-red-400 font-medium">Last run encountered an error</span>
+                        <span className="text-muted-foreground">— {pipelineActivity.agentName} failed</span>
+                    </>
+                )}
+                {pipelineActivity.kind === 'idle' && (
+                    <>
+                        <span className="h-2 w-2 rounded-full bg-zinc-500 shrink-0" />
+                        <span className="text-zinc-500">Pipeline idle — waiting for next signal</span>
+                    </>
+                )}
             </div>
 
             {/* Pipeline flow */}

@@ -250,6 +250,11 @@ class ExecuteActionRequest(BaseModel):
     parameters: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TriggerPipelineRequest(BaseModel):
+    """Body for POST /agents/trigger."""
+    alert_id: Optional[str] = None
+
+
 @app.patch("/alerts/{alert_id}/status", response_model=Alert)
 async def update_alert_status(alert_id: str, update: AlertStatusUpdate):
     """
@@ -336,16 +341,17 @@ async def get_agents_status():
         count = state.get("execution_count", 0)
         total_ms = state.get("total_execution_time_ms", 0)
         state["avg_execution_time_ms"] = (total_ms // count) if count > 0 else 0
-    return states
+    return {"agents": states, "last_signal_type": storage.last_signal_type}
 
 
 @app.post("/agents/trigger")
-async def trigger_agent_pipeline():
+async def trigger_agent_pipeline(body: TriggerPipelineRequest):
     """
-    Queue the agent pipeline to run on the most recent alert's context.
+    Queue the agent pipeline to run on a specific alert (or the latest alert).
 
-    Creates a synthetic detection signal from the latest alert and adds it
-    to the processing queue. The background processor picks it up within 5 s.
+    Body: { "alert_id": "<uuid>" }  — optional. If omitted or null, uses the most
+    recent alert. Creates a synthetic detection signal and adds it to the processing
+    queue. The background processor picks it up within 5 s.
     """
     alerts = storage.get_all_alerts()
     if not alerts:
@@ -356,13 +362,21 @@ async def trigger_agent_pipeline():
     if any(s.get("status") == "running" for s in agent_states):
         return {"success": False, "message": "Agent pipeline is currently running. Please wait."}
 
-    latest = alerts[-1]
-    threat_type = latest.get("threat_type", "BRUTE_FORCE")
+    # Resolve target alert
+    if body.alert_id:
+        target = storage.get_alert_by_id(body.alert_id)
+        if not target:
+            raise HTTPException(status_code=404, detail=f"Alert '{body.alert_id}' not found")
+    else:
+        target = alerts[-1]
+
+    threat_type = target.get("threat_type", "BRUTE_FORCE")
 
     _type_map = {
         "BRUTE_FORCE": "BRUTE_FORCE",
         "SUSPICIOUS_LOGIN": "SUSPICIOUS_LOGIN",
         "INSIDER_THREAT": "INSIDER_THREAT",
+        "ANOMALOUS_ACCESS": "ANOMALOUS_ACCESS",
     }
     signal_type_str = _type_map.get(threat_type, "BRUTE_FORCE")
 
@@ -371,16 +385,17 @@ async def trigger_agent_pipeline():
     synthetic = DetectionSignal(
         signal_id=str(uuid.uuid4()),
         signal_type=SignalType(signal_type_str),
-        user=latest.get("user", "unknown"),
-        severity=Severity(latest.get("severity", "HIGH")),
+        user=target.get("user", "unknown"),
+        severity=Severity(target.get("severity", "HIGH")),
         events=[],
-        metadata={"triggered_manually": True, "source_alert_id": latest.get("alert_id", "")},
+        detected_at=datetime.utcnow().isoformat(),
+        metadata={"triggered_manually": True, "source_alert_id": target.get("alert_id", "")},
     )
     storage.add_signal(synthetic)
 
     return {
         "success": True,
-        "message": f"Pipeline queued for user '{latest.get('user', 'unknown')}'. Updates visible in ~5 s.",
+        "message": f"Pipeline queued for user '{target.get('user', 'unknown')}'. Updates visible in ~5 s.",
     }
 
 

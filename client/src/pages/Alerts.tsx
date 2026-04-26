@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Alert } from '../types';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
-import { X, Bot, Shield, FileText, Search, Filter, Loader2, RefreshCw, Download } from 'lucide-react';
+import { X, Bot, Shield, FileText, Search, Filter, Loader2, RefreshCw, Download, Check } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { fetchAlerts, updateAlertStatus, executeAction } from '../services/api';
+import { fetchAlerts, updateAlertStatus, executeAction, triggerAgentPipeline } from '../services/api';
 
 const Alerts: React.FC = () => {
     const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -19,6 +19,10 @@ const Alerts: React.FC = () => {
 
     // Track execute-button state per alert+action: key = `${alertId}-${actionIndex}`
     const [actionStates, setActionStates] = useState<Record<string, 'executing' | 'done' | 'error'>>({});
+
+    // Run Playbook button state
+    const [playbookState, setPlaybookState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+    const [playbookNotification, setPlaybookNotification] = useState<{ text: string; ok: boolean } | null>(null);
 
     // Derive selectedAlert from alerts array to ensure it's always in sync
     const selectedAlert = selectedAlertId ? alerts.find(a => a.id === selectedAlertId) || null : null;
@@ -141,6 +145,37 @@ const handleExportCSV = () => {
   document.body.removeChild(link);
 };
 
+// Run the agent pipeline on the highest-severity open alert
+const SEVERITY_ORDER: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+
+const handleRunPlaybook = async () => {
+    const open = filteredAlerts.filter(a => a.status === 'open');
+    if (!open.length) {
+        setPlaybookNotification({ text: 'No open alerts to run playbook on', ok: false });
+        setTimeout(() => setPlaybookNotification(null), 5000);
+        return;
+    }
+    const target = open.reduce((best, cur) =>
+        (SEVERITY_ORDER[cur.severity] ?? 0) > (SEVERITY_ORDER[best.severity] ?? 0) ? cur : best
+    );
+
+    setPlaybookState('loading');
+    setPlaybookNotification(null);
+    try {
+        const res = await triggerAgentPipeline(target.id);
+        if (res.success) {
+            setPlaybookState('success');
+            setPlaybookNotification({ text: `Pipeline triggered on: ${target.title} (${target.severity.toUpperCase()})`, ok: true });
+            setTimeout(() => setPlaybookState('idle'), 3000);
+            setTimeout(() => setPlaybookNotification(null), 5000);
+        } else {
+            setPlaybookState('error');
+        }
+    } catch {
+        setPlaybookState('error');
+    }
+};
+
 // Fetch alerts from API
     const loadAlerts = useCallback(async () => {
         setRefreshing(true);
@@ -207,28 +242,56 @@ const handleExportCSV = () => {
                         {loading ? 'Loading alerts...' : `${filteredAlerts.length} of ${alerts.length} ${alerts.length === 1 ? 'alert' : 'alerts'} ${severityFilter || statusFilter || searchQuery ? 'shown' : 'detected'}`}
                     </p>
                 </div>
-                <div className="flex gap-2">
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => loadAlerts()}
-                        disabled={refreshing}
-                        className="gap-2"
-                    >
-                        <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
-                        Refresh
-                    </Button>
-                    <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportCSV}
-            disabled={filteredAlerts.length === 0}
-            className="gap-2"
-          >
-            <Download className="h-4 w-4" />
-            Export CSV
-          </Button>
-                    <Button>Run Playbook</Button>
+                <div className="flex flex-col items-end gap-1.5">
+                    <div className="flex gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => loadAlerts()}
+                            disabled={refreshing}
+                            className="gap-2"
+                        >
+                            <RefreshCw className={cn("h-4 w-4", refreshing && "animate-spin")} />
+                            Refresh
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleExportCSV}
+                            disabled={filteredAlerts.length === 0}
+                            className="gap-2"
+                        >
+                            <Download className="h-4 w-4" />
+                            Export CSV
+                        </Button>
+                        <Button
+                            size="sm"
+                            onClick={handleRunPlaybook}
+                            disabled={playbookState === 'loading' || playbookState === 'success'}
+                            className={cn(
+                                "gap-1.5 min-w-[130px]",
+                                playbookState === 'error' && "border-red-500 text-red-400 hover:bg-red-500/10"
+                            )}
+                        >
+                            {playbookState === 'loading' ? (
+                                <><Loader2 className="h-3.5 w-3.5 animate-spin" />Running...</>
+                            ) : playbookState === 'success' ? (
+                                <><Check className="h-3.5 w-3.5" />Playbook Started</>
+                            ) : playbookState === 'error' ? (
+                                'Failed — Retry'
+                            ) : (
+                                'Run Playbook'
+                            )}
+                        </Button>
+                    </div>
+                    {playbookNotification && (
+                        <p className={cn(
+                            "text-xs",
+                            playbookNotification.ok ? "text-emerald-400" : "text-muted-foreground"
+                        )}>
+                            {playbookNotification.text}
+                        </p>
+                    )}
                 </div>
             </div>
 
