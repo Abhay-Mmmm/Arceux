@@ -1,7 +1,7 @@
 # Arceux — Implementation Overview
 
-**Version:** 0.4.1 (Day 1 Fixes v2.1 — Bug Fixes & Error Handling)  
-**Last Updated:** 2026-04-25  
+**Version:** 0.5.0 (Day 2 — Detection Expansion & Agent Integration)  
+**Last Updated:** 2026-04-26  
 **Status:** Active Development — Early Prototype
 
 ---
@@ -16,8 +16,8 @@
 | Routing | React Router DOM 6.18 |
 | Backend | FastAPI + Uvicorn (Python) |
 | AI Chatbot | Groq API (`groq` SDK, `llama-3.3-70b-versatile`) |
-| AI Agents | CrewAI + LangChain + `langchain-groq` (Groq) |
-| Storage | In-memory + JSON file persistence |
+| AI Agents | CrewAI + LiteLLM (`groq/llama-3.3-70b-versatile` string format) |
+| Storage | Purely in-memory (no disk persistence) |
 | Async | Python asyncio + threading |
 
 ---
@@ -37,11 +37,11 @@ Arceux/
 │   ├── api.py                     # All API endpoints
 │   ├── main.py                    # Orchestrator/entry point
 │   ├── chatbot.py                 # Groq chatbot + template fallback
-│   ├── agents/crew_system.py      # CrewAI 6-agent system (Groq LLM)
-│   ├── detection_engine.py        # Rule-based threat detection
+│   ├── agents/crew_system.py      # CrewAI 6-agent system (Groq via LiteLLM)
+│   ├── detection_engine.py        # Rule-based threat detection (6 rules)
 │   ├── storage.py                 # Thread-safe in-memory store
 │   ├── models.py                  # Pydantic data models
-│   └── log_generator.py           # Synthetic log generator
+│   └── log_generator.py           # Synthetic log generator + attack sequences
 └── artifacts/                     # Design docs and implementation notes
 ```
 
@@ -54,30 +54,26 @@ Arceux/
 #### Dashboard (`client/src/pages/Dashboard.tsx`)
 - **System Heartbeat Visualization:** SVG-based waveform charts for 6 system components with live latency polling every 2 seconds. Color-coded by health status (green/yellow/red).
 - **AI Analyst Chat Panel:** Full chatbot UI with message history, role-based styling, 4 quick-action buttons (Explain last alert, Threat summary, Recommend actions, System status), markdown rendering, and Enter-to-send.
-- **Alerts Feed:** Auto-fetches high/critical alerts every 5 seconds; shows severity badges, timestamps, and opens a modal on click.
-- **System Metrics Cards:** Threat severity distribution bar chart (Recharts), compliance status badges (SOC 2, ISO 27001, GDPR, IRDAI, PCI DSS).
-- **Modal Dialogs:** Alert Intelligence modal (AI trace + recommendations), Service Diagnostics modal (latency history), System Check modal (diagnostic progress).
+- **High Priority Alerts Feed:** Auto-fetches high/critical alerts every 5 seconds; shows severity badges, timestamps, and opens a modal on click.
+- **System Perf Card:** Dynamic CPU / Memory / Network bars driven by live backend data — CPU scales with total component event throughput, Memory scales with alert backlog pressure, Network is inverse of average latency. Bars animate with `transition-all duration-700` and color-shift green → yellow → red at 60% and 85%.
+- **Threat Severity Chart:** Bar chart (Recharts) showing distribution across CRITICAL / HIGH / MEDIUM / LOW.
+- **Compliance Card:** Static status badges for SOC 2, ISO 27001, GDPR, IRDAI, PCI DSS.
+- **Modal Dialogs:** Alert Intelligence modal (AI trace + recommendations), Service Diagnostics modal (latency history), System Check modal (live backend data).
 
 #### Alerts Page (`client/src/pages/Alerts.tsx`)
-- **Alert Table:** Sortable by severity, name, asset/user, confidence, status, timestamp.
+- **Alert Table:** Severity, name, asset/user, confidence, status, timestamp columns.
 - **Filter System:** Cyclic filters for severity and status; real-time search across title, user, asset, description; live filtered/total counter.
-- **Take Ownership:** Optimistic UI update → backend `PATCH /alerts/{id}/status` sync. `localModifications` cleared on success, kept as fallback on failure.
-- **Execute Actions:** Execute buttons in the detail panel call `POST /actions/execute`. Buttons show spinner during execution, "Done ✓" on success, "Retry" on error, and are disabled after success to prevent double-firing.
-- **Detail Slide-Out Panel:** Right-side drawer with full alert details, AI agent trace (numbered timeline), and live-wired recommended action buttons. Smooth slide-in/out animation.
-- **Relative Timestamps:** Human-readable ("5 mins ago") with graceful handling of invalid dates.
+- **Take Ownership:** Optimistic UI update → backend `PATCH /alerts/{id}/status` sync.
+- **Execute Actions:** Per-action buttons with spinner/done/retry states; disabled after success.
+- **Export CSV:** Exports filtered alerts to a dated CSV file.
+- **Detail Slide-Out Panel:** Right-side drawer with full alert details, AI agent trace, and recommended action buttons.
+- **Relative Timestamps:** Human-readable ("5 mins ago") with graceful fallback for invalid dates.
 
 #### Agent Insights Page (`client/src/pages/AgentInsights.tsx`)
-- **Agent Pipeline Visualization:** 6 agents shown as connected boxes with live status indicators (idle/running/completed/error) polled every 3 s.
-- **Agent Detail Cards:** Click any agent for expanded detail panel showing last trace, task count, avg execution time, last run timestamp.
-- **Run on Latest Alert button:** Calls `POST /agents/trigger` to queue a pipeline run on the most recent alert context.
-- **Live Terminal Output:** Each card's terminal shows real `last_execution_trace` lines from the most recent crew run. Running state shows amber cursor animation.
-- **CPU/Runs indicator:** Bottom bar shows run count and load bar state based on agent status (idle/running/completed).
-
-#### Layout & Navigation
-- Sidebar icon navigation to all 3 pages.
-- Hover-activated user profile panel (name, role, ID).
-- Full dark theme with CSS custom properties.
-- Fade-in animations and hover states throughout.
+- **Agent Pipeline Visualization:** 6 agents shown as connected boxes with live status indicators polled every 3 s.
+- **Agent Detail Cards:** Expanded detail with last trace, task count, avg execution time, last run timestamp.
+- **Run on Latest Alert:** Calls `POST /agents/trigger` to queue a pipeline run.
+- **Error State:** Shows explicit error message if backend is unreachable (no silent blank page).
 
 #### API Service Layer (`client/src/services/api.ts`)
 - `fetchAlerts()`, `fetchAlertById()`, `fetchMetrics()`, `fetchRealtimeMetrics()`, `checkHealth()`, `ingestLog()`.
@@ -85,14 +81,9 @@ Arceux/
 - `executeAction({ action_type, alert_id, parameters })` — calls `POST /actions/execute`.
 - `fetchAgentStatus()` — calls `GET /agents/status`.
 - `triggerAgentPipeline()` — calls `POST /agents/trigger`.
-- Alert transformation: maps backend schema → frontend format, uses backend `status` field.
-- `useAlerts()` React hook: polling with configurable interval, loading/error/refetch states.
 
 #### UI Components
-- `Badge.tsx` — severity/status variants with color mapping.
-- `Button.tsx` — size and variant props.
-- `Card.tsx` — container with optional padding.
-- `Modal.tsx` — dialog with close handler.
+- `Badge.tsx`, `Button.tsx`, `Card.tsx`, `Modal.tsx`
 
 ---
 
@@ -109,7 +100,7 @@ Arceux/
 | `GET /agents/status` | ✅ All 6 agent states with stats |
 | `POST /agents/trigger` | ✅ Queue pipeline run from latest alert |
 | `GET /metrics` | ✅ Summary (totals, by-severity, recent activity) |
-| `GET /metrics/realtime` | ✅ Component health + latency history (6 components) |
+| `GET /metrics/realtime` | ✅ Component health + latency history |
 | `POST /chat` | ✅ Free-form or quick-action chat (Groq + template fallback) |
 | `GET /health` | ✅ Basic health check |
 | `GET /debug/logs` | ✅ Recent ingested logs |
@@ -117,13 +108,26 @@ Arceux/
 | `POST /debug/clear` | ✅ Clear all storage |
 
 #### Detection Engine (`server/detection_engine.py`)
-Three rule-based detectors, all stateful:
-- **BRUTE_FORCE:** >5 failed logins within a 2-minute sliding window per user, tracking unique source IPs.
-- **SUSPICIOUS_LOGIN:** Login from a hardcoded set of suspicious locations (Russia, North Korea, Iran, Tor Exit Node, etc.) → HIGH severity.
-- **INSIDER_THREAT:** Privilege escalation followed by data download → CRITICAL severity, correlated per user.
+Six stateful rule-based detectors using per-user sliding windows:
+
+| # | Rule | Trigger | Severity | Signal Type |
+|---|------|---------|----------|-------------|
+| 1 | **Brute Force** | >5 failed logins / 2 min, same user | HIGH | `BRUTE_FORCE` |
+| 2 | **Suspicious Login** | Successful/new-country login from high-risk location | HIGH | `SUSPICIOUS_LOGIN` |
+| 2b | **Suspicious Probe** | Failed login FROM high-risk location | MEDIUM | `SUSPICIOUS_LOGIN` |
+| 3 | **Impossible Travel** | Same user, different country, <10 min apart | CRITICAL | `SUSPICIOUS_LOGIN` |
+| 4 | **Account Takeover** | Successful login after 3+ failures in 5 min | HIGH | `SUSPICIOUS_LOGIN` |
+| 5 | **Insider Threat** | Privilege escalation → data download, same user | CRITICAL | `INSIDER_THREAT` |
+| 6 | **Data Exfiltration** | Downloads from 3+ different assets in 5 min | HIGH | `ANOMALOUS_ACCESS` |
+
+New state tracked per engine instance:
+- `failed_login_window` — sliding deque per user (rules 1, 4)
+- `recent_escalations` — deque per user (rule 5)
+- `data_download_window` — sliding deque per user (rule 6)
+- `last_login_location` — `{user: {location, timestamp}}` dict (rule 3)
 
 #### 6-Agent CrewAI System (`server/agents/crew_system.py`)
-Sequential agent pipeline powered by Groq (`llama-3.3-70b-versatile` via `langchain-groq`):
+Sequential agent pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteLLM string format):
 
 | # | Agent | Role |
 |---|-------|------|
@@ -134,97 +138,75 @@ Sequential agent pipeline powered by Groq (`llama-3.3-70b-versatile` via `langch
 | 5 | Compliance Agent | GDPR/IRDAI regulatory evaluation |
 | 6 | Response Automation Agent | Remediation planning |
 
-- All agents receive `llm=groq_llm` when `GROQ_API_KEY` is set; fall back to simulated trace otherwise.
-- `run_agent_analysis` updates `storage.agent_states` throughout execution: sets all agents to `running` at start, `completed` (with elapsed ms and trace) on success, `error` on failure.
-- Entire `run_agent_analysis` wrapped in try/except — never crashes the background processor.
-- Background task in `main.py` polls storage every 5 seconds, runs crew on pending signals, creates alerts.
-
-#### Chatbot (`server/chatbot.py`)
-- **Live LLM:** Uses Groq API (`groq` SDK, `llama-3.3-70b-versatile`).
-- **System prompt:** "Senior SOC analyst with deep threat intelligence expertise" injected as system role into every Groq call.
-- **Context injection:** Last 5 alerts as JSON + alert stats included in every user prompt.
-- **Quick-action prompts:** Each action type (`explain_last`, `threat_summary`, `recommend_actions`, `system_status`) gets its own focused prompt.
-- **Template fallback:** If `GROQ_API_KEY` is not set or any Groq call fails, falls back to data-driven templates — no crash, no empty response.
-
-#### Execute Action Handlers (`server/api.py — POST /actions/execute`)
-- **`block_ip`:** Extracts source IP from alert's `raw_events`, adds it to `storage.blocked_ips` (thread-safe set), adds timestamped note to alert metadata.
-- **`reset_credentials`:** Adds alert user to `storage.flagged_users` (thread-safe set), adds timestamped note to alert metadata.
-- All actions logged in `storage.executed_actions` (thread-safe).
-- Unknown action types are logged generically and return success.
-
-#### Agent Status API (`server/api.py`)
-| Endpoint | Description |
-|----------|-------------|
-| `GET /agents/status` | Returns all 6 agent states (status, last_run, tasks_completed, avg_execution_time_ms, last_execution_trace) |
-| `POST /agents/trigger` | Queues a synthetic signal from latest alert for background pipeline processing |
-
-#### Storage Layer (`server/storage.py`)
-- Thread-safe in-memory collections for logs, signals, alerts, and executed actions.
-- JSON file persistence: saves alerts to disk on update, restores on startup.
-- `update_alert_status(alert_id, status)` — updates alert status field and persists.
-- `add_alert_note(alert_id, note)` — appends a note to `alert.metadata.notes`.
-- `add_executed_action(action)` — logs executed response actions.
-- `blocked_ips: Set[str]` — set of IPs blocked via the execute action handler.
-- `flagged_users: Set[str]` — set of users flagged for credential reset.
-- `agent_states: Dict[str, Dict]` — per-agent state dict (status, last_run, tasks_completed, execution_count, total_execution_time_ms, last_execution_trace).
-- `update_agent_state(name, updates)` — thread-safe partial update of agent state.
-- `get_all_agent_states()` — returns snapshot list of all 6 agent state dicts.
-- Lock-based synchronization for all concurrent access.
-
-#### Data Models (`server/models.py`)
-`EventType`, `SecurityLog`, `Severity`, `SignalType`, `DetectionSignal`, `Alert`, `MetricsSummary`, `ThreatAnalysis`, `ContextEnrichment` — all Pydantic models.  
-`Alert` now includes `status: str = "open"` field (open | investigating | resolved).
+- LLM passed as `"groq/llama-3.3-70b-versatile"` string (LiteLLM format) — no longer uses `langchain_groq.ChatGroq`.
+- `GROQ_API_KEY` read from environment; LiteLLM picks it up automatically.
+- Falls back to simulated trace if key is missing or LLM call fails.
+- `run_agent_analysis` updates `storage.agent_states` throughout execution.
 
 #### Log Generator (`server/log_generator.py`)
-- Synthetic realistic logs: 6 users, 6 asset types, 5 event types with weighted distribution.
-- Suspicious-location bias: higher chance of suspicious location on suspicious event types.
-- Runs in background thread, POSTs a new log every 1–3 seconds.
+- **Normal logs:** 6 users, 6 asset types, 5 event types with weighted distribution (50% successful_login, 25% failed_login, 15% data_download, 5% privilege_escalation, 5% new_country_login). Fires every 1–3 seconds.
+- **`generate_brute_force_burst()`:** 7 rapid failed logins from same user/IP/location. All arrive within ~3 seconds — guarantees BRUTE_FORCE trigger.
+- **`generate_insider_threat_sequence()`:** `privilege_escalation` followed 1 second later by `data_download` for the same user/asset — guarantees INSIDER_THREAT trigger.
 
 #### System Orchestrator (`server/main.py`)
+- **Attack sequence probabilities per cycle:**
+  - 15% → brute-force burst
+  - 10% → insider threat sequence
+  - 75% → normal random log
 - Starts API server and log generator as daemon threads.
-- Runs background async `process_pending_signals()` task.
+- Runs background `process_pending_signals()` task.
 - Handles SIGINT/SIGTERM for graceful shutdown.
+
+#### Storage Layer (`server/storage.py`)
+- **Purely in-memory** — no JSON file persistence. Alerts always start at zero on restart.
+- Thread-safe collections for logs (capped at 1000), signals, alerts, and executed actions.
+- `blocked_ips: Set[str]`, `flagged_users: Set[str]` for action tracking.
+- `agent_states: Dict[str, Dict]` — per-agent state (status, last_run, tasks_completed, execution_count, total_execution_time_ms, last_execution_trace).
+- Lock-based synchronization on all concurrent access.
+
+#### Data Models (`server/models.py`)
+`EventType`, `SecurityLog`, `Severity`, `SignalType`, `DetectionSignal`, `Alert`, `MetricsSummary`, `ThreatAnalysis`, `ContextEnrichment` — all Pydantic models.
+
+#### Chatbot (`server/chatbot.py`)
+- Live Groq calls (`llama-3.3-70b-versatile`) with last 5 alerts as context.
+- Quick-action prompts: `explain_last`, `threat_summary`, `recommend_actions`, `system_status`.
+- Template fallback when key is missing or call fails.
 
 ---
 
 ## Not Yet Started
 
-These are planned/implied by the architecture but have no code yet:
-
 | Feature | Notes |
 |---------|-------|
-| **WebSocket real-time push** | Currently HTTP polling at 2–5s intervals. Frontend and API are structurally ready for an upgrade. |
-| **Database persistence** | JSON file storage is POC-only. PostgreSQL or MongoDB integration needed for scale. |
-| **Authentication / RBAC** | No auth at all currently. All API endpoints are open. |
-| **SIEM / log source connectors** | Only synthetic logs. No Splunk, ELK, Chronicle, or syslog integration. |
-| **ML-based anomaly detection** | Detection engine is rules-only (3 patterns). No statistical or ML models. |
+| **WebSocket real-time push** | Currently HTTP polling at 2–5 s intervals. |
+| **Database persistence** | Purely in-memory. PostgreSQL or MongoDB needed for scale. |
+| **Authentication / RBAC** | All API endpoints are open. |
+| **SIEM / log source connectors** | Only synthetic logs. No Splunk, ELK, or syslog integration. |
+| **ML-based anomaly detection** | Detection engine is rules-only. No statistical or ML models. |
 | **Slack / ServiceNow integration** | No third-party notification or ticketing. |
 | **Multi-tenancy** | Single-instance, single-org design. |
 | **Audit logging** | No record of who viewed/actioned what. |
-| **Stream processing (Kafka/Flink)** | Log generator goes direct to API; no message queue. |
 
 ---
 
 ## Mock / Placeholder Data
 
-Items that render in the UI but use hardcoded or randomly generated values:
-
 | Location | What's Mocked |
 |----------|---------------|
-| `Dashboard.tsx` | CPU (78%), RAM (45%), NET (92%) — hardcoded strings |
-| `Dashboard.tsx` | System Check modal — fake progress bar (0→100% over 1.2s) |
-| `Dashboard.tsx` | Service details — uptime 99.99%, error rate 0.001%, load 45% |
-| `AgentInsights.tsx` | CPU load bar — driven by agent status (idle/running/completed), not real CPU |
-| `api.py` | Realtime metrics — partially randomized latency generation |
-| `data/mock.ts` | 5 sample alerts, 6 component definitions, 5 agent profiles, 5 compliance items — used as offline fallback |
+| `Dashboard.tsx` — System Check modal | Fake progress animation (0→100% over 1.2s) |
+| `Dashboard.tsx` — Service details | Uptime 99.99%, error rate 0.001% are static |
+| `AgentInsights.tsx` | CPU load bar driven by agent status, not real CPU |
+| `api.py` | Realtime metrics latency values are partially randomized |
+| `data/mock.ts` | 5 sample alerts, 6 component definitions — offline fallback only |
 
 ---
 
 ## Known Technical Debt
 
-1. **Alert aging** — storage caps at 100 alerts per query; older alerts are not deleted but older pages may be missed if limit is hit.
-2. **No API proxy in Vite config** — backend URL hardcoded to `http://localhost:8000` in `api.ts:9`; env variable `VITE_API_URL` exists but needs wiring.
-3. **Sequential CrewAI** — agents run one at a time (sequential process); no parallelism even for independent tasks.
+1. **Alert volume** — storage caps GET /alerts at 100 by default; older alerts not deleted but may be missed if limit is hit.
+2. **No API proxy in Vite config** — backend URL hardcoded to `http://localhost:8000` in `api.ts`; `VITE_API_URL` env var exists but not wired.
+3. **Sequential CrewAI** — agents run one at a time; no parallelism for independent tasks.
+4. **Data exfiltration fires on same asset** — exfiltration rule counts unique assets, but the log generator can repeat the same asset for a user, reducing trigger frequency.
 
 ---
 
@@ -232,55 +214,83 @@ Items that render in the UI but use hardcoded or randomly generated values:
 
 **Backend** — `server/.env` (copy from `.env.example`):
 ```
-GROQ_API_KEY=...                      # Required for live AI reasoning (free tier at console.groq.com)
+GROQ_API_KEY=gsk_...                  # Required — get free key at console.groq.com
 GROQ_MODEL=llama-3.3-70b-versatile    # Model selection
 API_HOST=0.0.0.0
 API_PORT=8000
 ```
 
-**Frontend** — `client/.env`:
+**Frontend** — `client/.env.local`:
 ```
-VITE_API_URL=http://localhost:8000   # Override backend URL
+VITE_API_URL=http://localhost:8000
+```
+
+**Python dependencies** — `server/requirements.txt`:
+```
+fastapi, uvicorn[standard], pydantic, crewai, litellm, groq,
+python-dotenv, requests, aiohttp<3.10, pytest
 ```
 
 ---
 
 ## Overall Assessment
 
-The core pipeline — log ingestion → rule-based detection → CrewAI agent analysis (Groq) → alert creation → frontend visualization — is fully functional end-to-end. Alert status changes persist to the backend. Execute buttons on recommended actions trigger real backend handlers that populate `blocked_ips` and `flagged_users` sets. The chatbot uses live Groq calls when a key is configured, falling back to data-driven templates when not. The Agent Insights page polls live agent state and supports manual pipeline triggering. The UI is polished, dark-themed, and animated.
+The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent analysis (Groq via LiteLLM) → alert creation → frontend visualization — is fully functional end-to-end. Six distinct threat patterns fire reliably: Brute Force, Suspicious Login (success + probe), Impossible Travel, Account Takeover, Insider Threat, and Data Exfiltration. The System Perf card in the Dashboard updates dynamically from live backend data. Storage is purely in-memory so each server restart begins with a clean slate. The chatbot uses live Groq calls when a key is configured, falling back to data-driven templates when not.
 
 ---
 
 ## Bug Fixes & Debugging Log
 
-**2026-04-25 — AgentInsights.tsx Blank Page**
+### 2026-04-25 — AgentInsights.tsx Blank Page
 
-*Root Cause:* The running backend process was not the current code (missing `/agents/status` endpoint). Additionally, `AgentInsights.tsx` silently swallowed all fetch errors, resulting in a blank page when the API call failed.
-
-*Diagnosis:*
-1. Verified `/agents/status` endpoint exists in source code (`server/api.py:282`).
-2. Checked running server routes via OpenAPI — endpoint was missing.
-3. Source file had correct endpoint but wasn't running the latest code.
-4. Frontend catch block silenced all errors (lines 69-78 of `AgentInsights.tsx`).
+*Root Cause:* `AgentInsights.tsx` silently swallowed all fetch errors in its catch block, leaving `agents = []` and `loading = false`, which produced a blank page.
 
 *Fix:*
-1. **Backend:** Replaced Windows-incompatible emoji characters causing encoding crashes. Fixed in:
-   - `server/storage.py` — Changed `✅`/`⚠️` to `[OK]`/`[WARN]`.
-   - `server/api.py` — Changed `🤖`/`🚨`/`✅`/`🛑` to `[*]`/`[ALERT]`/`[OK]`/`[STOP]`.
-   - `server/main.py` — Changed all print emojis to ASCII equivalents.
-2. **Frontend:** Added explicit error state in `AgentInsights.tsx`:
-   - Added `error` state variable.
-   - Modified `loadAgents` to set error message on failure.
-   - Added error rendering in pipeline flow and agent cards grid.
+- Added explicit `error` state in `AgentInsights.tsx`; catch block now sets error message.
+- Added error UI in pipeline and cards sections.
 
-*Files Changed:*
-- `server/storage.py` — Emoji → ASCII
-- `server/api.py` — Emoji → ASCII  
-- `server/main.py` — Emoji → ASCII
-- `client/src/pages/AgentInsights.tsx` — Added error handling and rendering
+*Files Changed:* `client/src/pages/AgentInsights.tsx`
 
-*Verification:*
-- `GET /agents/status` returns 200 with all 6 agent states.
-- Frontend properly renders agents or shows error message (not blank).
+---
 
-Remaining gaps before production-grade use: a real database, authentication, SIEM connectors, and WebSocket real-time push.
+### 2026-04-25 — Alert History Persisting Across Restarts
+
+*Root Cause:* `ArceuxStorage._load_from_disk()` reloaded `data/alerts.json` on every startup. Two separate `data/` directories existed (`Arceux/data/` and `Arceux/server/data/`) causing confusion about which file was active.
+
+*Fix:*
+- Removed `_load_from_disk()` and all `_persist_to_disk()` calls entirely.
+- Removed `json`, `Path`, and `data_dir` from storage — now purely in-memory.
+- Deleted `server/data/alerts.json` (627 stale alerts).
+
+*Files Changed:* `server/storage.py`
+
+---
+
+### 2026-04-25 — CrewAI Agent LLM Validation Error
+
+*Root Cause:* `crew_system.py` passed a `langchain_groq.ChatGroq` object as the `llm` parameter. Newer CrewAI dropped LangChain LLM support and now validates `llm` as either a string or its own `BaseLLM` type.
+
+*Fix:*
+- Removed `langchain_groq` import entirely.
+- Changed `groq_llm` to a LiteLLM-format string: `"groq/llama-3.3-70b-versatile"`.
+- Installed `litellm` and removed `langchain`/`langchain-groq` from `requirements.txt`.
+- Resolved pydantic/python-dotenv version conflicts by upgrading crewai and litellm together.
+
+*Files Changed:* `server/agents/crew_system.py`, `server/requirements.txt`
+
+---
+
+### 2026-04-26 — No Detections Firing
+
+*Root Cause:* Three compounding issues:
+1. Brute force requires >5 failures; random log distribution rarely produced 6 for the same user in 2 minutes.
+2. Suspicious login rule only checked `successful_login` and `new_country_login` — `failed_login` attempts from North Korea/Russia/Tor were silently ignored.
+3. Insider threat timing was random — `data_download` frequently arrived before `privilege_escalation`.
+
+*Fix:*
+- Added `generate_brute_force_burst()` (7 rapid failed logins) with 15% fire probability per cycle.
+- Added `generate_insider_threat_sequence()` (escalation → download, same user) with 10% fire probability per cycle.
+- Added Rule 2b: failed login from suspicious location → MEDIUM `SUSPICIOUS_LOGIN` signal.
+- Added 3 new detection rules: Impossible Travel (CRITICAL), Account Takeover (HIGH), Data Exfiltration (HIGH → `ANOMALOUS_ACCESS`).
+
+*Files Changed:* `server/detection_engine.py`, `server/log_generator.py`, `server/main.py`

@@ -82,6 +82,36 @@ def generate_brute_force_burst() -> list:
     ]
 
 
+def generate_insider_threat_sequence() -> list:
+    """
+    Generate privilege_escalation immediately followed by data_download for
+    the same user — guaranteed to trigger INSIDER_THREAT detection.
+    """
+    target_user = random.choice(USERS)
+    location = random.choice(SAFE_LOCATIONS)
+    asset = random.choice(["customer-db", "employee-records", "payment-gateway"])
+    ip = generate_ip()
+
+    return [
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "user": target_user,
+            "event_type": "privilege_escalation",
+            "ip": ip,
+            "location": location,
+            "asset": asset,
+        },
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "user": target_user,
+            "event_type": "data_download",
+            "ip": ip,
+            "location": location,
+            "asset": asset,
+        },
+    ]
+
+
 def generate_log() -> Dict[str, Any]:
     """
     Generate a single synthetic security log.

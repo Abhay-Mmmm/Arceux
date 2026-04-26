@@ -22,7 +22,7 @@ import requests
 
 # Import all components
 from models import SecurityLog
-from log_generator import generate_log, generate_brute_force_burst, INGESTION_URL
+from log_generator import generate_log, generate_brute_force_burst, generate_insider_threat_sequence, INGESTION_URL
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Global state
@@ -53,10 +53,14 @@ def run_log_generator():
     
     while not shutdown_event.is_set():
         try:
-            # ~15% chance: fire a brute-force burst (7 rapid failed logins, same user/IP)
-            if random.random() < 0.15:
+            # Attack sequence probabilities:
+            #   15% → brute-force burst (7 rapid failed logins)
+            #   10% → insider threat sequence (escalation → download)
+            #   75% → normal random log
+            r = random.random()
+            if r < 0.15:
                 burst = generate_brute_force_burst()
-                print(f"[BURST] Brute-force sequence → {burst[0]['user']} from {burst[0]['location']}")
+                print(f"[BURST] Brute-force → {burst[0]['user']} from {burst[0]['location']}")
                 for b_log in burst:
                     if shutdown_event.is_set():
                         break
@@ -69,7 +73,23 @@ def run_log_generator():
                                 print(f"[DETECT] Detection: {data.get('signal_type')}")
                     except requests.exceptions.RequestException:
                         pass
-                    time.sleep(0.4)  # rapid succession within 2-min window
+                    time.sleep(0.4)
+            elif r < 0.25:
+                seq = generate_insider_threat_sequence()
+                print(f"[SEQ] Insider threat → {seq[0]['user']} escalation + download")
+                for s_log in seq:
+                    if shutdown_event.is_set():
+                        break
+                    try:
+                        response = requests.post(INGESTION_URL, json=s_log, timeout=2)
+                        if response.status_code == 200:
+                            log_count += 1
+                            data = response.json()
+                            if data.get("status") == "detected":
+                                print(f"[DETECT] Detection: {data.get('signal_type')}")
+                    except requests.exceptions.RequestException:
+                        pass
+                    time.sleep(1.0)  # slight gap so timestamps are ordered
             else:
                 log = generate_log()
 
