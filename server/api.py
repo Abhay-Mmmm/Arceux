@@ -12,6 +12,7 @@ This is the orchestration layer connecting all components.
 import uuid
 import asyncio
 import os
+import time
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
@@ -36,22 +37,44 @@ from agents.crew_system import run_agent_analysis
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def process_pending_signals():
-    """Background task: Process signals with CrewAI agents."""
+    """Background task: Process signals with CrewAI agents (rate-limited).
+
+    pipeline_running is a single-writer flag — only this coroutine ever sets it
+    True, and it is always reset in either the inner finally or the outer except.
+    No asyncio.Lock is needed because there is exactly one instance of this task
+    and all check/set operations are synchronous (no yield between them).
+    """
     while True:
         try:
+            now = time.time()
+
+            # Skip if pipeline is already running or cooldown is active
+            if storage.pipeline_running:
+                await asyncio.sleep(5)
+                continue
+            if now - storage.last_pipeline_run < storage.PIPELINE_COOLDOWN_SECONDS:
+                await asyncio.sleep(5)
+                continue
+
             pending = storage.get_pending_signals()
-            
-            for signal_dict in pending:
-                # Convert to DetectionSignal object
-                from models import DetectionSignal
-                signal = DetectionSignal(**signal_dict)
-                
-                print(f"\n[*] Processing signal {signal.signal_id} with AI agents...")
-                
-                # Run agent analysis in threadpool to avoid blocking event loop
+            if not pending:
+                await asyncio.sleep(5)
+                continue
+
+            # Process only the most recent pending signal; discard older ones
+            signal_dict = pending[-1]
+            for older in pending[:-1]:
+                storage.mark_signal_processed(older["signal_id"])
+
+            from models import DetectionSignal
+            signal = DetectionSignal(**signal_dict)
+
+            print(f"\n[*] Processing signal {signal.signal_id} with AI agents...")
+
+            storage.pipeline_running = True
+            try:
                 agent_output = await run_in_threadpool(run_agent_analysis, signal)
-                
-                # Parse agent output into alert
+
                 alert = Alert(
                     alert_id=str(uuid.uuid4()),
                     timestamp=datetime.now(timezone.utc).isoformat(),
@@ -61,25 +84,44 @@ async def process_pending_signals():
                     explanation=agent_output.get("result", "No explanation available"),
                     recommendation="Review immediately and verify user identity",
                     agent_trace=agent_output.get("agent_trace", []),
-                    raw_events=[event.model_dump() if hasattr(event, 'model_dump') else event 
-                               for event in signal.events],
+                    raw_events=[
+                        event.model_dump() if hasattr(event, "model_dump") else event
+                        for event in signal.events
+                    ],
                     metadata={
                         "signal_id": signal.signal_id,
                         "agent_success": agent_output.get("success", False),
-                        **signal.metadata
-                    }
+                        **signal.metadata,
+                    },
                 )
-                
-                # Store alert
+
                 storage.add_alert(alert)
                 storage.mark_signal_processed(signal.signal_id)
-                
                 print(f"[OK] Alert {alert.alert_id} created from signal {signal.signal_id}")
-        
+
+            except Exception as e:
+                # Increment attempt counter on the signal dict (mutates in-place in storage.signals).
+                # Dead-letter after 3 failures so a malformed/deterministic-error signal
+                # cannot cause an infinite retry loop.
+                attempts = signal_dict.get("attempts", 0) + 1
+                signal_dict["attempts"] = attempts
+                print(f"[WARN] Error processing signal {signal.signal_id} (attempt {attempts}): {e}")
+                if attempts >= 3:
+                    print(f"[WARN] Dead-lettering signal {signal.signal_id} after {attempts} failed attempts")
+                    storage.mark_signal_processed(signal.signal_id)
+            finally:
+                storage.pipeline_running = False
+                storage.last_pipeline_run = time.time()
+
         except Exception as e:
+            # Outer guard: catches failures in get_pending_signals, DetectionSignal(**), etc.
+            # pipeline_running is reset here so the next iteration can proceed.
+            # last_pipeline_run is set to enforce the cooldown even on unexpected failures,
+            # preventing an unthrottled retry loop.
+            storage.pipeline_running = False
+            storage.last_pipeline_run = time.time()
             print(f"[WARN] Error in background processing: {e}")
-        
-        # Check every 5 seconds
+
         await asyncio.sleep(5)
 
 
