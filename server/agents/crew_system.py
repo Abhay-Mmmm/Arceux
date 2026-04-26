@@ -16,6 +16,7 @@ from models import DetectionSignal
 
 groq_llm = None
 
+<<<<<<< HEAD
 _api_key = os.getenv("GROQ_API_KEY")
 _model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
@@ -25,7 +26,6 @@ if _api_key:
     print(f"Groq LLM for CrewAI initialised ({_model})")
 else:
     print("GROQ_API_KEY not set — CrewAI agents will use fallback trace")
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 1️⃣ Orchestrator Agent (The Coordinator)
