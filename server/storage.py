@@ -47,6 +47,11 @@ class ArceuxStorage:
             for name in _AGENT_NAMES
         }
 
+        # Pipeline rate limiting
+        self.last_pipeline_run: float = 0.0
+        self.pipeline_running: bool = False
+        self.PIPELINE_COOLDOWN_SECONDS: int = 15
+
         # Thread safety
         self._lock = Lock()
 

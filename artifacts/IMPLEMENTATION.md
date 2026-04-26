@@ -1,6 +1,6 @@
 # Arceux — Implementation Overview
 
-**Version:** 0.5.0 (Day 2 — Detection Expansion & Agent Integration)  
+**Version:** 0.6.0 (Day 2 — Rate Limit Hardening & Agent Routing)  
 **Last Updated:** 2026-04-26  
 **Status:** Active Development — Early Prototype
 
@@ -15,8 +15,8 @@
 | Charts | Recharts 2.9 |
 | Routing | React Router DOM 6.18 |
 | Backend | FastAPI + Uvicorn (Python) |
-| AI Chatbot | Groq API (`groq` SDK, `llama-3.3-70b-versatile`) |
-| AI Agents | CrewAI + LiteLLM (`groq/llama-3.3-70b-versatile` string format) |
+| AI Chatbot | Groq API (`groq` SDK, `llama-3.1-8b-instant`) — dedicated key (`GROQ_API_KEY_CHAT`) |
+| AI Agents | CrewAI + LiteLLM (`groq/llama-3.3-70b-versatile`) — signal-type routed, per-agent keys |
 | Storage | Purely in-memory (no disk persistence) |
 | Async | Python asyncio + threading |
 
@@ -127,7 +127,7 @@ New state tracked per engine instance:
 - `last_login_location` — `{user: {location, timestamp}}` dict (rule 3)
 
 #### 6-Agent CrewAI System (`server/agents/crew_system.py`)
-Sequential agent pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteLLM string format):
+Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteLLM / CrewAI LLM class):
 
 | # | Agent | Role |
 |---|-------|------|
@@ -138,10 +138,22 @@ Sequential agent pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteLLM
 | 5 | Compliance Agent | GDPR/IRDAI regulatory evaluation |
 | 6 | Response Automation Agent | Remediation planning |
 
-- LLM passed as `"groq/llama-3.3-70b-versatile"` string (LiteLLM format) — no longer uses `langchain_groq.ChatGroq`.
-- `GROQ_API_KEY` read from environment; LiteLLM picks it up automatically.
+**Signal-type routing** — only relevant agents run per signal:
+
+| Signal Type | Agents Selected |
+|-------------|----------------|
+| `BRUTE_FORCE` | Alert Handler, Threat Analyzer, Response Automation |
+| `SUSPICIOUS_LOGIN` | Alert Handler, Threat Analyzer, Compliance |
+| `INSIDER_THREAT` | All 6 agents (full pipeline) |
+| `ANOMALOUS_ACCESS` | Alert Handler, Root Cause, Compliance |
+| DEFAULT | Alert Handler, Threat Analyzer |
+
+**Per-agent API keys** — each agent reads its own key (`GROQ_API_KEY_ORCHESTRATOR`, etc.) with fallback to `GROQ_API_KEY`. Key prefix logged on startup for verification.
+
+**Output limits** — every Agent has `max_iter=1`, `memory=False`. Every Task has a strict word-count cap in its `expected_output` (60–100 words). Crew runs with `verbose=False`.
+
+- Only agents that actually ran get their `agent_states` updated; skipped agents retain previous state.
 - Falls back to simulated trace if key is missing or LLM call fails.
-- `run_agent_analysis` updates `storage.agent_states` throughout execution.
 
 #### Log Generator (`server/log_generator.py`)
 - **Normal logs:** 6 users, 6 asset types, 5 event types with weighted distribution (50% successful_login, 25% failed_login, 15% data_download, 5% privilege_escalation, 5% new_country_login). Fires every 1–3 seconds.
@@ -168,9 +180,37 @@ Sequential agent pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteLLM
 `EventType`, `SecurityLog`, `Severity`, `SignalType`, `DetectionSignal`, `Alert`, `MetricsSummary`, `ThreatAnalysis`, `ContextEnrichment` — all Pydantic models.
 
 #### Chatbot (`server/chatbot.py`)
-- Live Groq calls (`llama-3.3-70b-versatile`) with last 5 alerts as context.
+- Live Groq calls using `llama-3.1-8b-instant` (fast, low token cost) via `GROQ_API_KEY_CHAT` (fallback: `GROQ_API_KEY`).
+- Key prefix logged on startup for verification.
 - Quick-action prompts: `explain_last`, `threat_summary`, `recommend_actions`, `system_status`.
 - Template fallback when key is missing or call fails.
+
+---
+
+## Performance & Token Optimizations
+
+### Signal-Type Agent Routing
+Only the agents relevant to a signal type are instantiated and run. BRUTE_FORCE, for example, skips the Root Cause and Compliance agents entirely — cutting token usage by ~50% vs. the full 6-agent pipeline.
+
+| Signal Type | Agents | Approx. Tokens Saved |
+|-------------|--------|----------------------|
+| BRUTE_FORCE | 3 of 6 | ~50% |
+| SUSPICIOUS_LOGIN | 3 of 6 | ~50% |
+| INSIDER_THREAT | 6 of 6 | 0% (full pipeline warranted) |
+| ANOMALOUS_ACCESS | 3 of 6 | ~50% |
+
+### Per-Agent Output Limits
+Every agent is constrained to 60–100 words via `expected_output`. `max_iter=1` eliminates retry loops. `memory=False` removes hidden token overhead from CrewAI's internal memory. `verbose=False` on Crew suppresses internal framework logging tokens.
+
+### Pipeline Cooldown (15 seconds)
+`storage.pipeline_running` flag and `storage.last_pipeline_run` timestamp enforce a 15-second cooldown between pipeline runs. Only the most recent pending signal is processed per window; older queued signals are discarded as stale. Prevents burst-detection scenarios from triggering back-to-back agent runs.
+
+### Model Split Strategy
+- **Agents** use `llama-3.3-70b-versatile` (`GROQ_MODEL_AGENTS`) — highest quality for deep analysis.
+- **Chatbot** uses `llama-3.1-8b-instant` (`GROQ_MODEL_CHAT`) — 4× faster, dramatically lower token consumption, separate rate-limit impact.
+
+### Per-Agent API Key Isolation
+Each agent and the chatbot can be assigned a dedicated Groq API key from a separate account, giving each its own rate-limit pool. Keys configured via: `GROQ_API_KEY_ORCHESTRATOR`, `GROQ_API_KEY_ALERT_HANDLER`, `GROQ_API_KEY_THREAT_ANALYZER`, `GROQ_API_KEY_ROOT_CAUSE`, `GROQ_API_KEY_COMPLIANCE`, `GROQ_API_KEY_RESPONSE`, `GROQ_API_KEY_CHAT`. All fall back to `GROQ_API_KEY` if not set.
 
 ---
 
@@ -207,6 +247,7 @@ Sequential agent pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteLLM
 2. **No API proxy in Vite config** — backend URL hardcoded to `http://localhost:8000` in `api.ts`; `VITE_API_URL` env var exists but not wired.
 3. **Sequential CrewAI** — agents run one at a time; no parallelism for independent tasks.
 4. **Data exfiltration fires on same asset** — exfiltration rule counts unique assets, but the log generator can repeat the same asset for a user, reducing trigger frequency.
+5. **Per-agent keys require separate Groq accounts** — keys from the same account share the same rate-limit pool; true isolation only works when each `GROQ_API_KEY_*` is from a different account. Single-account fallback still helps isolate chatbot vs. agent traffic.
 
 ---
 
@@ -214,8 +255,22 @@ Sequential agent pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteLLM
 
 **Backend** — `server/.env` (copy from `.env.example`):
 ```
-GROQ_API_KEY=gsk_...                  # Required — get free key at console.groq.com
-GROQ_MODEL=llama-3.3-70b-versatile    # Model selection
+# Shared fallback
+GROQ_API_KEY=gsk_...                        # Required — get free key at console.groq.com
+
+# Per-agent keys (optional — separate Groq accounts for true pool isolation)
+GROQ_API_KEY_ORCHESTRATOR=gsk_...
+GROQ_API_KEY_ALERT_HANDLER=gsk_...
+GROQ_API_KEY_THREAT_ANALYZER=gsk_...
+GROQ_API_KEY_ROOT_CAUSE=gsk_...
+GROQ_API_KEY_COMPLIANCE=gsk_...
+GROQ_API_KEY_RESPONSE=gsk_...
+GROQ_API_KEY_CHAT=gsk_...
+
+# Model selection
+GROQ_MODEL_AGENTS=llama-3.3-70b-versatile   # Agent pipeline
+GROQ_MODEL_CHAT=llama-3.1-8b-instant        # Chatbot (fast + cheap)
+
 API_HOST=0.0.0.0
 API_PORT=8000
 ```
@@ -277,6 +332,21 @@ The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent
 - Resolved pydantic/python-dotenv version conflicts by upgrading crewai and litellm together.
 
 *Files Changed:* `server/agents/crew_system.py`, `server/requirements.txt`
+
+---
+
+### 2026-04-26 — Groq Rate Limits Triggered Within 10 Seconds of Startup
+
+*Root Cause:* Four compounding issues: (1) All 6 agents ran on every signal regardless of type, wasting tokens and saturating the rate limit immediately. (2) Agent tasks had no output length constraints, producing verbose multi-paragraph responses that consumed large token budgets. (3) The background processor ran a new pipeline every 5 s even when the previous one hadn't finished, causing concurrent API calls. (4) The chatbot used the same large model and key pool as the agents, competing for rate limit headroom.
+
+*Fix:*
+- **Signal-type routing** — `get_agents_for_signal()` selects 3–6 agents per signal type; skipped agents retain their previous state and are not updated.
+- **Output limits** — `max_iter=1`, `memory=False` on every Agent; strict word-count cap in every Task's `expected_output`; `verbose=False` on Crew.
+- **Pipeline cooldown** — 15-second cooldown enforced via `storage.pipeline_running` flag and `storage.last_pipeline_run` timestamp; only the most recent pending signal is processed per window.
+- **Model split** — chatbot switched to `llama-3.1-8b-instant` via `GROQ_MODEL_CHAT`; agents keep `llama-3.3-70b-versatile` via `GROQ_MODEL_AGENTS`.
+- **Per-agent API keys** — each agent reads `GROQ_API_KEY_<NAME>` with fallback to `GROQ_API_KEY`; chatbot reads `GROQ_API_KEY_CHAT`; key prefix logged on startup.
+
+*Files Changed:* `server/agents/crew_system.py`, `server/storage.py`, `server/api.py`, `server/chatbot.py`, `server/.env.example`
 
 ---
 

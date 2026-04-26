@@ -12,19 +12,18 @@ from typing import Dict
 # Try to initialise Groq client
 GROQ_AVAILABLE = False
 _groq_client = None
-_model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+_model_name = os.getenv("GROQ_MODEL_CHAT", "llama-3.1-8b-instant")
+_api_key = os.getenv("GROQ_API_KEY_CHAT") or os.getenv("GROQ_API_KEY")
 
 try:
     from groq import Groq
 
-    _api_key = os.getenv("GROQ_API_KEY")
-
     if _api_key:
         _groq_client = Groq(api_key=_api_key)
         GROQ_AVAILABLE = True
-        print(f"Groq chatbot initialised ({_model_name})")
+        print(f"Groq chatbot initialised ({_model_name}, key: {_api_key[:8]}...)")
     else:
-        print("GROQ_API_KEY not set — chatbot using template fallback")
+        print("No chat API key set — chatbot using template fallback")
 except ImportError:
     print("groq not installed — chatbot using template fallback")
 except Exception as e:
