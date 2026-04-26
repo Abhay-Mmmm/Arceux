@@ -1,6 +1,6 @@
 # Arceux — Implementation Overview
 
-**Version:** 0.6.0 (Day 2 — Rate Limit Hardening & Agent Routing)  
+**Version:** 0.7.0 (Day 2 — UI Anti-Flicker, Real-Time Severity Chart, Stale-State Reset)  
 **Last Updated:** 2026-04-26  
 **Status:** Active Development — Early Prototype
 
@@ -56,13 +56,14 @@ Arceux/
 - **AI Analyst Chat Panel:** Full chatbot UI with message history, role-based styling, 4 quick-action buttons (Explain last alert, Threat summary, Recommend actions, System status), markdown rendering, and Enter-to-send.
 - **High Priority Alerts Feed:** Auto-fetches high/critical alerts every 5 seconds; shows severity badges, timestamps, and opens a modal on click.
 - **System Perf Card:** Dynamic CPU / Memory / Network bars driven by live backend data — CPU scales with total component event throughput, Memory scales with alert backlog pressure, Network is inverse of average latency. Bars animate with `transition-all duration-700` and color-shift green → yellow → red at 60% and 85%.
-- **Threat Severity Chart:** Bar chart (Recharts) showing distribution across CRITICAL / HIGH / MEDIUM / LOW.
+- **Threat Severity Chart:** Real-time bar chart (Recharts) showing distribution across CRITICAL / HIGH / MEDIUM / LOW. Polls `GET /metrics` every 5 seconds via `fetchMetrics()`; chart data derived from `alerts_by_severity` in the response via `useMemo`. Uses `isAnimationActive={false}` to prevent the bar-grow animation from replaying on each poll update. `allowDecimals={false}` on YAxis. No static fallback — starts at zero until first poll resolves.
 - **Compliance Card:** Static status badges for SOC 2, ISO 27001, GDPR, IRDAI, PCI DSS.
 - **Modal Dialogs:** Alert Intelligence modal (AI trace + recommendations), Service Diagnostics modal (latency history), System Check modal (live backend data).
 
 #### Alerts Page (`client/src/pages/Alerts.tsx`)
 - **Alert Table:** Severity, name, asset/user, confidence, status, timestamp columns.
 - **Filter System:** Cyclic filters for severity and status; real-time search across title, user, asset, description; live filtered/total counter.
+- **Auto-Refresh:** Polls `GET /alerts` every 10 seconds via `setInterval`.
 - **Take Ownership:** Optimistic UI update → backend `PATCH /alerts/{id}/status` sync.
 - **Execute Actions:** Per-action buttons with spinner/done/retry states; disabled after success.
 - **Export CSV:** Exports filtered alerts to a dated CSV file.
@@ -70,10 +71,28 @@ Arceux/
 - **Relative Timestamps:** Human-readable ("5 mins ago") with graceful fallback for invalid dates.
 
 #### Agent Insights Page (`client/src/pages/AgentInsights.tsx`)
-- **Agent Pipeline Visualization:** 6 agents shown as connected boxes with live status indicators polled every 3 s.
+Complete rewrite with React performance optimizations to eliminate yellow-flash artifacts during state transitions:
+
+- **Anti-Flicker Polling:** `setAgents` uses JSON diff (`JSON.stringify` comparison) before applying updates — if the server returns identical data, the previous state reference is preserved and no re-render occurs.
+- **Stable `useCallback`:** `loadAgents` is defined with an empty dependency array `[]` and uses an `everLoadedRef` (`useRef(false)`) to distinguish first-load failures from transient polling errors. The polling `setInterval` never restarts unnecessarily.
+- **`React.memo` Components:** `AgentCard` and `PipelineNode` are wrapped in `React.memo` — child components only re-render when their own props actually change.
+- **Tiered Error States:**
+  - `initialLoading` — shows skeleton placeholder during first fetch only.
+  - `pollFailed` — subtle subtitle indicator shown when a background poll fails but agents were already loaded.
+  - `hardError` — explicit error message only shown when the backend never responded (first fetch failed).
+- **Status Configuration:** `STATUS_CFG` object defined outside the component (stable reference, never recreated):
+
+  | Status | Dot Color | Label |
+  |--------|-----------|-------|
+  | `idle` | zinc-600 | IDLE |
+  | `running` | amber-400 (animate-ping at opacity-40) | RUNNING |
+  | `completed` | emerald-500 | DONE |
+  | `error` | red-400 | FAILED |
+
+- **Agent Pipeline Visualization:** 6 agents shown as connected boxes with live status indicators polled every 3 seconds.
 - **Agent Detail Cards:** Expanded detail with last trace, task count, avg execution time, last run timestamp.
 - **Run on Latest Alert:** Calls `POST /agents/trigger` to queue a pipeline run.
-- **Error State:** Shows explicit error message if backend is unreachable (no silent blank page).
+- **`isAnyRunning` and `selected`** derived via `useMemo` to avoid redundant computation on each render.
 
 #### API Service Layer (`client/src/services/api.ts`)
 - `fetchAlerts()`, `fetchAlertById()`, `fetchMetrics()`, `fetchRealtimeMetrics()`, `checkHealth()`, `ingestLog()`.
@@ -107,6 +126,11 @@ Arceux/
 | `GET /debug/signals` | ✅ Detection signals + processed status |
 | `POST /debug/clear` | ✅ Clear all storage |
 
+**Pipeline rate-limit enforcement** in `process_pending_signals()`:
+- Checks `storage.pipeline_running` (concurrent run guard) and `now - storage.last_pipeline_run < PIPELINE_COOLDOWN_SECONDS` (15 s cooldown) before proceeding.
+- Processes only the most recent pending signal (`pending[-1]`); marks all older pending signals as processed (discarded as stale).
+- `try/finally` always resets `pipeline_running = False` and updates `last_pipeline_run = time.time()`.
+
 #### Detection Engine (`server/detection_engine.py`)
 Six stateful rule-based detectors using per-user sliding windows:
 
@@ -120,10 +144,12 @@ Six stateful rule-based detectors using per-user sliding windows:
 | 5 | **Insider Threat** | Privilege escalation → data download, same user | CRITICAL | `INSIDER_THREAT` |
 | 6 | **Data Exfiltration** | Downloads from 3+ different assets in 5 min | HIGH | `ANOMALOUS_ACCESS` |
 
-New state tracked per engine instance:
-- `failed_login_window` — sliding deque per user (rules 1, 4)
-- `recent_escalations` — deque per user (rule 5)
-- `data_download_window` — sliding deque per user (rule 6)
+**High-risk locations set:** `{"Russia", "North Korea", "Unknown", "Tor Exit Node", "Romania", "Iran"}`
+
+Sliding window deques per-user (all capped at `maxlen` to bound memory):
+- `failed_login_window` — per user, deque of timestamps (rules 1, 4)
+- `recent_escalations` — per user, deque of `(timestamp, asset)` tuples (rule 5)
+- `data_download_window` — per user, deque of `(timestamp, asset)` tuples (rule 6)
 - `last_login_location` — `{user: {location, timestamp}}` dict (rule 3)
 
 #### 6-Agent CrewAI System (`server/agents/crew_system.py`)
@@ -152,7 +178,9 @@ Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteL
 
 **Output limits** — every Agent has `max_iter=1`, `memory=False`. Every Task has a strict word-count cap in its `expected_output` (60–100 words). Crew runs with `verbose=False`.
 
-- Only agents that actually ran get their `agent_states` updated; skipped agents retain previous state.
+**Stale-error reset** — before each pipeline run, any agent NOT selected for the current signal that still holds `status == "error"` from a previous failed run is reset to `"idle"`. This prevents zombie error display on agents that are simply not participants in the current routing path.
+
+- Only agents in `selected_names` get their `agent_states` updated during a run.
 - Falls back to simulated trace if key is missing or LLM call fails.
 
 #### Log Generator (`server/log_generator.py`)
@@ -174,6 +202,7 @@ Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteL
 - Thread-safe collections for logs (capped at 1000), signals, alerts, and executed actions.
 - `blocked_ips: Set[str]`, `flagged_users: Set[str]` for action tracking.
 - `agent_states: Dict[str, Dict]` — per-agent state (status, last_run, tasks_completed, execution_count, total_execution_time_ms, last_execution_trace).
+- Pipeline rate-limit fields: `last_pipeline_run: float = 0.0`, `pipeline_running: bool = False`, `PIPELINE_COOLDOWN_SECONDS: int = 15`.
 - Lock-based synchronization on all concurrent access.
 
 #### Data Models (`server/models.py`)
@@ -218,7 +247,7 @@ Each agent and the chatbot can be assigned a dedicated Groq API key from a separ
 
 | Feature | Notes |
 |---------|-------|
-| **WebSocket real-time push** | Currently HTTP polling at 2–5 s intervals. |
+| **WebSocket real-time push** | Currently HTTP polling at 2–10 s intervals depending on page. |
 | **Database persistence** | Purely in-memory. PostgreSQL or MongoDB needed for scale. |
 | **Authentication / RBAC** | All API endpoints are open. |
 | **SIEM / log source connectors** | Only synthetic logs. No Splunk, ELK, or syslog integration. |
@@ -231,19 +260,22 @@ Each agent and the chatbot can be assigned a dedicated Groq API key from a separ
 
 ## Mock / Placeholder Data
 
-| Location | What's Mocked |
-|----------|---------------|
-| `Dashboard.tsx` — System Check modal | Fake progress animation (0→100% over 1.2s) |
-| `Dashboard.tsx` — Service details | Uptime 99.99%, error rate 0.001% are static |
-| `AgentInsights.tsx` | CPU load bar driven by agent status, not real CPU |
-| `api.py` | Realtime metrics latency values are partially randomized |
-| `data/mock.ts` | 5 sample alerts, 6 component definitions — offline fallback only |
+| Location | What's Mocked | Live Alternative |
+|----------|---------------|-----------------|
+| `Dashboard.tsx` — System Check modal | Fake progress animation (0→100% over 1.2s) | None |
+| `Dashboard.tsx` — Service details | Uptime 99.99%, error rate 0.001% are static strings | None |
+| `Dashboard.tsx` — Compliance card | SOC 2 / ISO 27001 / GDPR / IRDAI / PCI DSS badges always static | None |
+| `AgentInsights.tsx` | CPU load bar driven by agent status, not real CPU metrics | None |
+| `api.py` — realtime metrics | Latency values are partially randomized per request | None |
+| `data/mock.ts` | 5 sample alerts + 6 component definitions — offline fallback only; never shown when backend is reachable | `GET /alerts`, `GET /metrics/realtime` |
+
+**Note on `data/mock.ts`:** The 6 component definitions in `mock.ts` are UI scaffolding for the heartbeat visualization — they are not related to the 6 CrewAI agents. The real agent states come exclusively from `GET /agents/status`.
 
 ---
 
 ## Known Technical Debt
 
-1. **Alert volume** — storage caps GET /alerts at 100 by default; older alerts not deleted but may be missed if limit is hit.
+1. **Alert volume** — storage caps `GET /alerts` at 100 by default; older alerts not deleted but may be missed if limit is hit.
 2. **No API proxy in Vite config** — backend URL hardcoded to `http://localhost:8000` in `api.ts`; `VITE_API_URL` env var exists but not wired.
 3. **Sequential CrewAI** — agents run one at a time; no parallelism for independent tasks.
 4. **Data exfiltration fires on same asset** — exfiltration rule counts unique assets, but the log generator can repeat the same asset for a user, reducing trigger frequency.
@@ -290,7 +322,7 @@ python-dotenv, requests, aiohttp<3.10, pytest
 
 ## Overall Assessment
 
-The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent analysis (Groq via LiteLLM) → alert creation → frontend visualization — is fully functional end-to-end. Six distinct threat patterns fire reliably: Brute Force, Suspicious Login (success + probe), Impossible Travel, Account Takeover, Insider Threat, and Data Exfiltration. The System Perf card in the Dashboard updates dynamically from live backend data. Storage is purely in-memory so each server restart begins with a clean slate. The chatbot uses live Groq calls when a key is configured, falling back to data-driven templates when not.
+The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent analysis (Groq via LiteLLM) → alert creation → frontend visualization — is fully functional end-to-end. Six distinct threat patterns fire reliably: Brute Force, Suspicious Login (success + probe), Impossible Travel, Account Takeover, Insider Threat, and Data Exfiltration. The System Perf card in the Dashboard updates dynamically from live backend data. The Threat Severity bar chart polls `GET /metrics` every 5 seconds for real counts. Storage is purely in-memory so each server restart begins with a clean slate. The chatbot uses live Groq calls when a key is configured, falling back to data-driven templates when not. Agent Insights renders without yellow-flash artifacts through React.memo, JSON-diff state updates, and stable polling references.
 
 ---
 
@@ -354,7 +386,7 @@ The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent
 
 *Root Cause:* Three compounding issues:
 1. Brute force requires >5 failures; random log distribution rarely produced 6 for the same user in 2 minutes.
-2. Suspicious login rule only checked `successful_login` and `new_country_login` — `failed_login` attempts from North Korea/Russia/Tor were silently ignored.
+2. Suspicious login rule only checked `successful_login` and `new_country_login` — `failed_login` attempts from high-risk locations were silently ignored.
 3. Insider threat timing was random — `data_download` frequently arrived before `privilege_escalation`.
 
 *Fix:*
@@ -364,3 +396,39 @@ The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent
 - Added 3 new detection rules: Impossible Travel (CRITICAL), Account Takeover (HIGH), Data Exfiltration (HIGH → `ANOMALOUS_ACCESS`).
 
 *Files Changed:* `server/detection_engine.py`, `server/log_generator.py`, `server/main.py`
+
+---
+
+### 2026-04-26 — AgentInsights Yellow Flash During State Transitions
+
+*Root Cause:* Three compounding issues:
+1. `setAgents(data)` was called on every 3-second poll even when the server returned identical data, always creating a new array reference and triggering a full re-render of all 6 agent cards simultaneously.
+2. `AgentCard` and `PipelineNode` were not memoized, so any parent re-render re-rendered all children regardless of prop changes.
+3. `useCallback` had `[agents.length]` in its dependency array (an earlier fix attempt), causing the polling interval to restart every time an agent changed status — producing extra immediate fetches and additional re-renders mid-transition. The amber `animate-ping` pulse active during the `running` state made each simultaneous re-render visually appear as a full-page yellow flash.
+4. Agents not selected by the signal-type router retained `status: "error"` from a previous failed run indefinitely, displayed as an error badge even when no error was occurring.
+
+*Fix:*
+- **JSON diff in `setAgents`:** `setAgents(prev => JSON.stringify(prev) === JSON.stringify(data) ? prev : data)` — preserves previous reference when data is unchanged, suppressing the re-render entirely.
+- **`React.memo`** on `AgentCard` and `PipelineNode` — child re-renders only when their own props change.
+- **Stable `useCallback`** with empty dependency array `[]`; `everLoadedRef` (`useRef(false)`) tracks whether any successful fetch has occurred, used in the catch block to decide whether to show `hardError` vs. `pollFailed`.
+- **Stale-error reset in `crew_system.py`:** Before each pipeline run, non-selected agents with `status == "error"` are reset to `"idle"`, preventing zombie error display.
+- **Reduced `animate-ping` opacity** from default to `opacity-40` to soften the running pulse.
+- **Removed `transition-all`** from heavy container elements that don't need animated layout shifts.
+- **Status label `ERROR` → `FAILED`** to reflect that the failure is a task/LLM failure, not a system error.
+
+*Files Changed:* `client/src/pages/AgentInsights.tsx`, `server/agents/crew_system.py`
+
+---
+
+### 2026-04-26 — Threat Severity Chart Was Static
+
+*Root Cause:* The bar chart in Dashboard used a hardcoded `SEVERITY_DATA` constant with fixed values `[{ name: 'Crit', value: 12 }, ...]` that never updated.
+
+*Fix:*
+- Removed `SEVERITY_DATA` constant.
+- Added `severityCounts` state initialized to `{ CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 }`.
+- Added `useEffect` that polls `fetchMetrics()` every 5 seconds and writes `data.alerts_by_severity` into `severityCounts`.
+- Derived `severityChartData` via `useMemo` from `severityCounts` so Recharts only receives a new array reference when counts actually change.
+- Set `isAnimationActive={false}` on `Bar` to prevent the grow animation from replaying on every poll tick.
+
+*Files Changed:* `client/src/pages/Dashboard.tsx`
