@@ -189,10 +189,14 @@ const Dashboard: React.FC = () => {
             if (!isMounted) return;
 
             if (alertsResult.status === 'fulfilled') {
-                const highPriority = alertsResult.value.filter(
+                const fetched = alertsResult.value.filter(
                     a => ['critical', 'high'].includes(a.severity)
                 );
-                setLiveAlerts(highPriority);
+                setLiveAlerts(prev => {
+                    const fetchedIds = new Set(fetched.map(a => a.id));
+                    // Fetched wins for ID collisions; preserve WS-only alerts not yet in the fetch
+                    return [...fetched, ...prev.filter(a => !fetchedIds.has(a.id))].slice(0, 10);
+                });
             }
             setAlertsLoading(false);
 

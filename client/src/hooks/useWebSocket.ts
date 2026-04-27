@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { arceuxWS } from '../services/websocket'
 
 export function useWebSocket<T>(
@@ -9,7 +9,7 @@ export function useWebSocket<T>(
     const [connected, setConnected] = useState(arceuxWS.connected)
     const onMessageRef = useRef(onMessage)
 
-    useEffect(() => { onMessageRef.current = onMessage })
+    useLayoutEffect(() => { onMessageRef.current = onMessage }, [onMessage])
 
     useEffect(() => {
         arceuxWS.connect()
@@ -19,6 +19,7 @@ export function useWebSocket<T>(
         })
         const unsubConnect = arceuxWS.on('__connected', () => setConnected(true))
         const unsubDisconnect = arceuxWS.on('__disconnected', () => setConnected(false))
+        setConnected(arceuxWS.connected)
         return () => { unsubEvent(); unsubConnect(); unsubDisconnect() }
     }, [eventType])
 

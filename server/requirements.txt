@@ -14,7 +14,6 @@ groq
 python-dotenv
 requests
 aiohttp<3.10
-websockets
 
 # ML / Anomaly Detection
 river==0.23.0

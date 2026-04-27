@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Alert } from '../types';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -17,6 +17,8 @@ const Alerts: React.FC = () => {
     // Track local modifications that haven't been synced to backend yet
     // Key: alert ID, Value: partial alert updates
     const [localModifications, setLocalModifications] = useState<Record<string, Partial<Alert>>>({});
+    const localModificationsRef = useRef(localModifications);
+    useEffect(() => { localModificationsRef.current = localModifications; }, [localModifications]);
 
     // Track execute-button state per alert+action: key = `${alertId}-${actionIndex}`
     const [actionStates, setActionStates] = useState<Record<string, 'executing' | 'done' | 'error'>>({});
@@ -182,7 +184,15 @@ const handleRunPlaybook = async () => {
         'new_alert',
         (msg) => {
             const alert = transformBackendAlert(msg.alert);
-            setAlerts(prev => prev.some(a => a.id === alert.id) ? prev : [alert, ...prev]);
+            setAlerts(prev => {
+                const idx = prev.findIndex(a => a.id === alert.id);
+                if (idx >= 0) {
+                    const updated = [...prev];
+                    updated[idx] = alert;
+                    return updated;
+                }
+                return [alert, ...prev];
+            });
         }
     );
 
@@ -201,9 +211,9 @@ const handleRunPlaybook = async () => {
         try {
             const data = await fetchAlerts({ limit: 100 });
 
-            // Merge backend data with local modifications
+            // Merge backend data with local modifications (read via ref — stable identity)
             const mergedAlerts = data.map(alert => {
-                const localMod = localModifications[alert.id];
+                const localMod = localModificationsRef.current[alert.id];
                 return localMod ? { ...alert, ...localMod } : alert;
             });
 
@@ -216,7 +226,7 @@ const handleRunPlaybook = async () => {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [localModifications]);
+    }, []); // stable — reads localModifications via ref
 
     // Filter and search alerts
     const filteredAlerts = alerts.filter(alert => {

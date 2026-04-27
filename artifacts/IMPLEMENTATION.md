@@ -345,7 +345,7 @@ Each agent and the chatbot can be assigned a dedicated Groq API key from a separ
 ## Known Technical Debt
 
 1. **Alert volume** — storage caps `GET /alerts` at 100 by default; older alerts not deleted but may be missed if limit is hit.
-2. **No API proxy in Vite config** — backend URL hardcoded to `http://localhost:8000` in `api.ts`; `VITE_API_URL` env var exists but not wired.
+2. **Partial `VITE_API_URL` wiring** — `api.ts` still hardcodes `http://localhost:8000`; `VITE_API_URL` is wired for the WS client (`client/src/services/websocket.ts`) but not yet for the REST layer.
 3. **Sequential CrewAI** — agents run one at a time; no parallelism for independent tasks.
 4. **Data exfiltration fires on same asset** — exfiltration rule counts unique assets, but the log generator can repeat the same asset for a user, reducing trigger frequency.
 5. **Per-agent keys require separate Groq accounts** — keys from the same account share the same rate-limit pool; true isolation only works when each `GROQ_API_KEY_*` is from a different account. Single-account fallback still helps isolate chatbot vs. agent traffic.
@@ -384,7 +384,8 @@ VITE_API_URL=http://localhost:8000
 **Python dependencies** — `server/requirements.txt`:
 ```
 fastapi, uvicorn[standard], pydantic, crewai, litellm, groq,
-python-dotenv, requests, aiohttp<3.10, websockets, river==0.23.0, pytest
+python-dotenv, requests, aiohttp<3.10, river==0.23.0, pytest
+(websockets is transitively provided by uvicorn[standard])
 ```
 
 ---

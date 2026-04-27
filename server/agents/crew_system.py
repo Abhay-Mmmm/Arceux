@@ -3,6 +3,7 @@ Arceux Agentic System - Specialized SOC Agents
 Signal-type routed, per-agent API keys, output-limited.
 """
 
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -10,6 +11,8 @@ from crewai import Agent, Task, Crew, Process
 from typing import Dict, Any, List, Tuple, Optional
 
 from models import DetectionSignal
+
+_logger = logging.getLogger(__name__)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -270,18 +273,20 @@ def _broadcast_agent_states() -> None:
     try:
         from websocket_manager import broadcast_sync
         from storage import storage as _s
-        states = _s.get_all_agent_states()
-        for state in states:
-            count = state.get("execution_count", 0)
-            total_ms = state.get("total_execution_time_ms", 0)
-            state["avg_execution_time_ms"] = (total_ms // count) if count > 0 else 0
+        projected = []
+        for state in _s.get_all_agent_states():
+            new_state = dict(state)
+            count = new_state.get("execution_count", 0)
+            total_ms = new_state.get("total_execution_time_ms", 0)
+            new_state["avg_execution_time_ms"] = (total_ms // count) if count > 0 else 0
+            projected.append(new_state)
         broadcast_sync({
             "type": "agent_status_updated",
-            "agents": states,
+            "agents": projected,
             "last_signal_type": _s.last_signal_type,
         })
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.debug("_broadcast_agent_states failed", exc_info=exc)
 
 
 def _broadcast_pipeline_completed(signal_type: str, agents_ran: int, elapsed_ms: int) -> None:
@@ -294,8 +299,8 @@ def _broadcast_pipeline_completed(signal_type: str, agents_ran: int, elapsed_ms:
             "agents_ran": agents_ran,
             "elapsed_ms": elapsed_ms,
         })
-    except Exception:
-        pass
+    except Exception as exc:
+        _logger.debug("_broadcast_pipeline_completed failed (signal_type=%s)", signal_type, exc_info=exc)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

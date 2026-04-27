@@ -1,12 +1,5 @@
-/**
- * Arceux WebSocket client
- *
- * Singleton that maintains a persistent connection to /ws and
- * automatically reconnects with exponential backoff on failure.
- * Pages subscribe to typed event channels via .on(type, callback).
- */
-
 const wsUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8000')
+    .replace(/\/$/, '')
     .replace(/^http/, 'ws') + '/ws';
 
 class ArceuxWebSocket {
@@ -16,7 +9,7 @@ class ArceuxWebSocket {
     private maxReconnectDelay: number = 30000;
     private reconnectAttempts: number = 0;
     private shouldReconnect: boolean = true;
-    private listeners: Map<string, Set<Function>> = new Map();
+    private listeners: Map<string, Set<(data: unknown) => void>> = new Map();
     private pingInterval: ReturnType<typeof setInterval> | null = null;
     private _connected: boolean = false;
 
@@ -88,13 +81,14 @@ class ArceuxWebSocket {
     }
 
     /** Register a callback for a message type. Returns an unsubscribe function. */
-    on(eventType: string, callback: Function): () => void {
+    on<T = unknown>(eventType: string, callback: (data: T) => void): () => void {
         if (!this.listeners.has(eventType)) {
             this.listeners.set(eventType, new Set());
         }
-        this.listeners.get(eventType)!.add(callback);
+        const cb = callback as (data: unknown) => void;
+        this.listeners.get(eventType)!.add(cb);
         return () => {
-            this.listeners.get(eventType)?.delete(callback);
+            this.listeners.get(eventType)?.delete(cb);
         };
     }
 
@@ -129,10 +123,8 @@ class ArceuxWebSocket {
     }
 
     private scheduleReconnect(): void {
-        const delay = Math.min(
-            Math.pow(2, this.reconnectAttempts) * 1000,
-            this.maxReconnectDelay
-        );
+        const delay = this.reconnectDelay;
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
         this.reconnectAttempts++;
         setTimeout(() => {
             if (this.shouldReconnect) {

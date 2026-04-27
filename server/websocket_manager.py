@@ -6,8 +6,11 @@ Thread-safe broadcast to all connected clients. Supports both async
 """
 
 import asyncio
+import logging
 from typing import Optional
 from fastapi import WebSocket
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
@@ -34,9 +37,13 @@ class ConnectionManager:
             *[ws.send_json(message) for ws in connections],
             return_exceptions=True,
         )
-        dead = [ws for ws, result in zip(connections, results) if isinstance(result, Exception)]
-        for ws in dead:
-            await self.disconnect(ws)
+        dead = {
+            ws for ws, result in zip(connections, results, strict=True)
+            if isinstance(result, Exception)
+        }
+        if dead:
+            async with self._lock:
+                self.active_connections = [ws for ws in self.active_connections if ws not in dead]
 
 
 manager = ConnectionManager()
@@ -56,8 +63,6 @@ def broadcast_sync(message: dict) -> None:
     if _main_loop is None or not _main_loop.is_running():
         return
     try:
-        asyncio.run_coroutine_threadsafe(
-            manager.broadcast(message), _main_loop
-        ).result(timeout=1.0)
+        asyncio.run_coroutine_threadsafe(manager.broadcast(message), _main_loop)
     except Exception:
-        pass
+        logger.debug("broadcast_sync: failed to schedule broadcast", exc_info=True)

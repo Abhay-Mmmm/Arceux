@@ -9,11 +9,14 @@ Main FastAPI application serving:
 This is the orchestration layer connecting all components.
 """
 
+import logging
 import uuid
 import asyncio
 import os
 import time
 from datetime import datetime, timezone
+
+_logger = logging.getLogger(__name__)
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
@@ -112,8 +115,8 @@ async def process_pending_signals():
                             "total_logs": metrics["total_logs"],
                         },
                     })
-                except Exception:
-                    pass
+                except Exception as e:
+                    _logger.debug("alert broadcast failed", exc_info=e)
 
             except Exception as e:
                 # Increment attempt counter on the signal dict (mutates in-place in storage.signals).
@@ -297,8 +300,8 @@ async def update_alert_status(alert_id: str, update: AlertStatusUpdate):
             "alert_id": alert_id,
             "status": update.status,
         })
-    except Exception:
-        pass
+    except Exception as e:
+        _logger.debug("alert_status_updated broadcast failed", exc_info=e)
 
     return Alert(**alert_dict)
 
