@@ -1,7 +1,7 @@
 # Arceux — Implementation Overview
 
-**Version:** 0.9.1 (River branch — base PR target was 0.7.0; incremented on this branch for River ML anomaly detection + dynamic confidence scoring additions)  
-**Last Updated:** 2026-04-26  
+**Version:** 1.0.0  
+**Last Updated:** 2026-04-27  
 **Status:** Active Development — Early Prototype
 
 ---
@@ -17,7 +17,8 @@
 | Backend | FastAPI + Uvicorn (Python) |
 | AI Chatbot | Groq API (`groq` SDK, `llama-3.1-8b-instant`) — dedicated key (`GROQ_API_KEY_CHAT`) |
 | AI Agents | CrewAI + LiteLLM (`groq/llama-3.3-70b-versatile`) — signal-type routed, per-agent keys |
-| ML Detection | River 0.21.0 (`HalfSpaceTrees`) — online anomaly detection, no retraining |
+| ML Detection | River 0.23.0 (`HalfSpaceTrees`) — online anomaly detection, no retraining |
+| Real-time | WebSocket (FastAPI/Starlette built-in) — server push |
 | Storage | Purely in-memory (no disk persistence) |
 | Async | Python asyncio + threading |
 
@@ -31,11 +32,14 @@ Arceux/
 │   └── src/
 │       ├── pages/                 # Dashboard, Alerts, AgentInsights
 │       ├── components/            # Badge, Button, Card, Modal
+│       ├── hooks/useWebSocket.ts  # WS hook — typed event subscriptions
 │       ├── services/api.ts        # API layer + useAlerts hook
+│       ├── services/websocket.ts  # Singleton ArceuxWebSocket client
 │       ├── data/mock.ts           # Mock data for offline fallback
 │       └── types.ts               # TypeScript interfaces
 ├── server/                        # Python FastAPI backend
-│   ├── api.py                     # All API endpoints
+│   ├── api.py                     # All API endpoints + /ws WebSocket
+│   ├── websocket_manager.py       # ConnectionManager + broadcast_sync
 │   ├── main.py                    # Orchestrator/entry point
 │   ├── chatbot.py                 # Groq chatbot + template fallback
 │   ├── agents/crew_system.py      # CrewAI 6-agent system (Groq via LiteLLM)
@@ -55,16 +59,16 @@ Arceux/
 #### Dashboard (`client/src/pages/Dashboard.tsx`)
 - **System Heartbeat Visualization:** SVG-based waveform charts for 6 system components with live latency polling every 2 seconds. Color-coded by health status (green/yellow/red).
 - **AI Analyst Chat Panel:** Full chatbot UI with message history, role-based styling, 4 quick-action buttons (Explain last alert, Threat summary, Recommend actions, System status), markdown rendering, and Enter-to-send.
-- **High Priority Alerts Feed:** Auto-fetches high/critical alerts every 5 seconds; shows severity badges, timestamps, and opens a modal on click.
+- **High Priority Alerts Feed:** Receives new high/critical alerts instantly via `new_alert` WebSocket push; falls back to polling every 30 seconds. Shows severity badges, timestamps, and opens a modal on click.
 - **System Perf Card:** Dynamic CPU / Memory / Network bars driven by live backend data — CPU scales with total component event throughput, Memory scales with alert backlog pressure, Network is inverse of average latency. Bars animate with `transition-all duration-700` and color-shift green → yellow → red at 60% and 85%.
-- **Threat Severity Chart:** Real-time bar chart (Recharts) showing distribution across CRITICAL / HIGH / MEDIUM / LOW. Polls `GET /metrics` every 5 seconds via `fetchMetrics()`; chart data derived from `alerts_by_severity` in the response via `useMemo`. Uses `isAnimationActive={false}` to prevent the bar-grow animation from replaying on each poll update. `allowDecimals={false}` on YAxis. No static fallback — starts at zero until first poll resolves.
+- **Threat Severity Chart:** Real-time bar chart (Recharts) showing distribution across CRITICAL / HIGH / MEDIUM / LOW. Updated instantly via `metrics_updated` WebSocket push; polls `GET /metrics` every 30 seconds as fallback. Chart data derived from `alerts_by_severity` via `useMemo`. Uses `isAnimationActive={false}` to prevent the bar-grow animation from replaying on each update. `allowDecimals={false}` on YAxis. No static fallback — starts at zero until first poll resolves.
 - **Compliance Card:** Static status badges for SOC 2, ISO 27001, GDPR, IRDAI, PCI DSS.
 - **Modal Dialogs:** Alert Intelligence modal (AI trace + recommendations), Service Diagnostics modal (latency history), System Check modal (live backend data).
 
 #### Alerts Page (`client/src/pages/Alerts.tsx`)
 - **Alert Table:** Severity, name, asset/user, confidence, status, timestamp columns.
 - **Filter System:** Cyclic filters for severity and status; real-time search across title, user, asset, description; live filtered/total counter.
-- **Auto-Refresh:** Polls `GET /alerts` every 10 seconds via `setInterval`.
+- **Real-time Push:** New alerts prepended instantly via `new_alert` WebSocket; status changes applied in-place via `alert_status_updated` WebSocket. Polls `GET /alerts` every 30 seconds as fallback.
 - **Take Ownership:** Optimistic UI update → backend `PATCH /alerts/{id}/status` sync.
 - **Execute Actions:** Per-action buttons with spinner/done/retry states; disabled after success.
 - **Export CSV:** Exports filtered alerts to a dated CSV file.
@@ -94,10 +98,10 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
   | `completed` | emerald-500 | DONE |
   | `error` | red-400 | FAILED |
 
-- **Agent Pipeline Visualization:** 6 agents shown as connected boxes with live status indicators polled every 3 seconds.
+- **Agent Pipeline Visualization:** 6 agents shown as connected boxes with live status indicators. Updated instantly via `agent_status_updated` WebSocket; polls `GET /agents/status` every 15 seconds as fallback.
 - **Agent Detail Cards:** Expanded detail with last trace, task count, avg execution time, last run timestamp.
 - **`selected`** derived via `useMemo` to avoid redundant computation on each render.
-- **Live Activity Feed Bar:** Full-width horizontal status bar directly below the page title. Derives its state entirely from the existing 3 s `GET /agents/status` poll (zero additional API calls). Four states:
+- **Live Activity Feed Bar:** Full-width horizontal status bar directly below the page title. Derives its state from live WebSocket `agent_status_updated` and `pipeline_completed` events (zero additional API calls). Four states:
 
   | State | Trigger | Display |
   |-------|---------|---------|
@@ -106,7 +110,7 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
   | Error | Any agent `status === "error"` | Red ✗ — "Last run encountered an error — [Agent] failed" |
   | Idle | All agents idle, no recent run | Zinc dot — "Pipeline idle — waiting for next signal" |
 
-  Signal type shown via `last_signal_type` field from `GET /agents/status` response. "Run on Latest Alert" button removed — pipeline is triggered automatically by the backend or via the Alerts page "Run Playbook" button.
+  Signal type shown via `last_signal_type` from both WebSocket events and the polling fallback. "Run on Latest Alert" button removed — pipeline is triggered automatically by the backend or via the Alerts page "Run Playbook" button.
 
 #### API Service Layer (`client/src/services/api.ts`)
 - `fetchAlerts()`, `fetchAlertById()`, `fetchMetrics()`, `fetchRealtimeMetrics()`, `checkHealth()`, `ingestLog()`.
@@ -114,7 +118,8 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
 - `executeAction({ action_type, alert_id, parameters })` — calls `POST /actions/execute`.
 - `fetchAgentStatus()` — calls `GET /agents/status`; returns `{ agents: AgentStatus[], last_signal_type: string | null }`.
 - `triggerAgentPipeline(alertId?)` — calls `POST /agents/trigger` with body `{ alert_id: alertId | null }`.
-- `transformBackendAlert()` — `confidence` field is now dynamic: River ML anomaly score × 100 when `metadata.river_ml` is true; severity-based fallback (`critical=95, high=80, medium=60, low=40`) otherwise.
+- `transformBackendAlert()` (exported) — `confidence` field is dynamic: River ML anomaly score × 100 (clamped 0–100) when `metadata.river_ml` is true; severity-based fallback (`critical=95, high=80, medium=60, low=40`) otherwise.
+- `BackendAlert` interface (exported) — used by WS `new_alert` handlers in pages to transform server-push payloads.
 
 #### UI Components
 - `Badge.tsx`, `Button.tsx`, `Card.tsx`, `Modal.tsx`
@@ -137,9 +142,22 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
 | `GET /metrics/realtime` | ✅ Component health + latency history |
 | `POST /chat` | ✅ Free-form or quick-action chat (Groq + template fallback) |
 | `GET /health` | ✅ Basic health check |
+| `GET /ws` | ✅ WebSocket endpoint — persistent connection, server-push events |
 | `GET /debug/logs` | ✅ Recent ingested logs |
 | `GET /debug/signals` | ✅ Detection signals + processed status |
 | `POST /debug/clear` | ✅ Clear all storage |
+
+**WebSocket events pushed to all clients:**
+
+| Event | Trigger | Payload |
+|-------|---------|---------|
+| `new_alert` | After `storage.add_alert()` | `{ type, alert: <alert.model_dump()> }` |
+| `metrics_updated` | After each new alert | `{ type, metrics: { alerts_by_severity, total_alerts, total_logs } }` |
+| `alert_status_updated` | After `PATCH /alerts/{id}/status` | `{ type, alert_id, status }` |
+| `agent_status_updated` | After each agent state change in crew_system | `{ type, agents: [...], last_signal_type }` |
+| `pipeline_completed` | After crew.kickoff() completes | `{ type, signal_type, agents_ran, elapsed_ms }` |
+
+Keepalive: client sends `"ping"` string every 25 s; server replies `{"type":"pong"}`. Server sends `{"type":"ping"}` if no message received within 30 s. Dead connections cleaned up after failed send via `asyncio.gather(return_exceptions=True)`.
 
 **Pipeline rate-limit enforcement** in `process_pending_signals()`:
 - Checks `storage.pipeline_running` (concurrent run guard) and `now - storage.last_pipeline_run < PIPELINE_COOLDOWN_SECONDS` (15 s cooldown) before proceeding.
@@ -300,7 +318,6 @@ Each agent and the chatbot can be assigned a dedicated Groq API key from a separ
 
 | Feature | Notes |
 |---------|-------|
-| **WebSocket real-time push** | Currently HTTP polling at 2–10 s intervals depending on page. |
 | **Database persistence** | Purely in-memory. PostgreSQL or MongoDB needed for scale. |
 | **Authentication / RBAC** | All API endpoints are open. |
 | **SIEM / log source connectors** | Only synthetic logs. No Splunk, ELK, or syslog integration. |
@@ -328,7 +345,7 @@ Each agent and the chatbot can be assigned a dedicated Groq API key from a separ
 ## Known Technical Debt
 
 1. **Alert volume** — storage caps `GET /alerts` at 100 by default; older alerts not deleted but may be missed if limit is hit.
-2. **No API proxy in Vite config** — backend URL hardcoded to `http://localhost:8000` in `api.ts`; `VITE_API_URL` env var exists but not wired.
+2. **Partial `VITE_API_URL` wiring** — `api.ts` still hardcodes `http://localhost:8000`; `VITE_API_URL` is wired for the WS client (`client/src/services/websocket.ts`) but not yet for the REST layer.
 3. **Sequential CrewAI** — agents run one at a time; no parallelism for independent tasks.
 4. **Data exfiltration fires on same asset** — exfiltration rule counts unique assets, but the log generator can repeat the same asset for a user, reducing trigger frequency.
 5. **Per-agent keys require separate Groq accounts** — keys from the same account share the same rate-limit pool; true isolation only works when each `GROQ_API_KEY_*` is from a different account. Single-account fallback still helps isolate chatbot vs. agent traffic.
@@ -367,14 +384,15 @@ VITE_API_URL=http://localhost:8000
 **Python dependencies** — `server/requirements.txt`:
 ```
 fastapi, uvicorn[standard], pydantic, crewai, litellm, groq,
-python-dotenv, requests, aiohttp<3.10, river==0.21.0, pytest
+python-dotenv, requests, aiohttp<3.10, river==0.23.0, pytest
+(websockets is transitively provided by uvicorn[standard])
 ```
 
 ---
 
 ## Overall Assessment
 
-The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent analysis (Groq via LiteLLM) → alert creation → frontend visualization — is fully functional end-to-end. Six distinct threat patterns fire reliably: Brute Force, Suspicious Login (success + probe), Impossible Travel, Account Takeover, Insider Threat, and Data Exfiltration. The System Perf card in the Dashboard updates dynamically from live backend data. The Threat Severity bar chart polls `GET /metrics` every 5 seconds for real counts. Storage is purely in-memory so each server restart begins with a clean slate. The chatbot uses live Groq calls when a key is configured, falling back to data-driven templates when not. Agent Insights renders without yellow-flash artifacts through React.memo, JSON-diff state updates, and stable polling references.
+The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent analysis (Groq via LiteLLM) → alert creation → frontend visualization — is fully functional end-to-end. Six distinct threat patterns fire reliably: Brute Force, Suspicious Login (success + probe), Impossible Travel, Account Takeover, Insider Threat, and Data Exfiltration. Real-time communication is now WebSocket-first: new alerts, metrics updates, agent status changes, and pipeline completions are pushed instantly to all connected clients; HTTP polling serves as a 15–30 s fallback. The System Perf card in the Dashboard updates dynamically from live backend data. Storage is purely in-memory so each server restart begins with a clean slate. The chatbot uses live Groq calls when a key is configured, falling back to data-driven templates when not. Agent Insights renders without yellow-flash artifacts through React.memo, structural comparator state updates, and stable polling references.
 
 ---
 
@@ -492,8 +510,8 @@ The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent
 *Audit Result:* Fix already correctly in place. Full audit of `client/src/services/api.ts`, `client/src/pages/Alerts.tsx`, and `client/src/types.ts` found no hardcoded confidence values.
 
 `transformBackendAlert()` computes confidence dynamically (lines 77–81 of `api.ts`):
-- River ML alerts (`metadata.river_ml === true` + `anomaly_score != null`): `Math.round(anomaly_score × 100)`
-- Rule-based alerts: `{ critical: 95, high: 80, medium: 60, low: 40 }[severity]` with `?? 75` fallback
+- River ML alerts (`metadata.river_ml === true` + `anomaly_score != null`): `Math.max(0, Math.min(100, Math.round(anomaly_score × 100)))`
+- Rule-based alerts: `{ critical: 95, high: 80, medium: 60, low: 40 }[severity]` (no fallback needed — `mappedSeverity` always resolves to a valid key via `|| 'medium'`)
 
 `Alerts.tsx` reads `alert.confidence` directly with no override. `types.ts` declares `confidence: number` with no default.
 

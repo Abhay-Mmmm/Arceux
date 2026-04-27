@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Alert } from '../types';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { X, Bot, Shield, FileText, Search, Filter, Loader2, RefreshCw, Download, Check } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { fetchAlerts, updateAlertStatus, executeAction, triggerAgentPipeline } from '../services/api';
+import { fetchAlerts, updateAlertStatus, executeAction, triggerAgentPipeline, BackendAlert, transformBackendAlert } from '../services/api';
+import { useWebSocket } from '../hooks/useWebSocket';
 
 const Alerts: React.FC = () => {
     const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -16,6 +17,8 @@ const Alerts: React.FC = () => {
     // Track local modifications that haven't been synced to backend yet
     // Key: alert ID, Value: partial alert updates
     const [localModifications, setLocalModifications] = useState<Record<string, Partial<Alert>>>({});
+    const localModificationsRef = useRef(localModifications);
+    useEffect(() => { localModificationsRef.current = localModifications; }, [localModifications]);
 
     // Track execute-button state per alert+action: key = `${alertId}-${actionIndex}`
     const [actionStates, setActionStates] = useState<Record<string, 'executing' | 'done' | 'error'>>({});
@@ -176,15 +179,41 @@ const handleRunPlaybook = async () => {
     }
 };
 
+// WebSocket push — new alerts and status changes arrive instantly
+    const { connected: wsConnected } = useWebSocket<{ alert: BackendAlert }>(
+        'new_alert',
+        (msg) => {
+            const alert = transformBackendAlert(msg.alert);
+            setAlerts(prev => {
+                const idx = prev.findIndex(a => a.id === alert.id);
+                if (idx >= 0) {
+                    const updated = [...prev];
+                    updated[idx] = alert;
+                    return updated;
+                }
+                return [alert, ...prev];
+            });
+        }
+    );
+
+    useWebSocket<{ alert_id: string; status: string }>(
+        'alert_status_updated',
+        (msg) => {
+            setAlerts(prev =>
+                prev.map(a => a.id === msg.alert_id ? { ...a, status: msg.status as Alert['status'] } : a)
+            );
+        }
+    );
+
 // Fetch alerts from API
     const loadAlerts = useCallback(async () => {
         setRefreshing(true);
         try {
             const data = await fetchAlerts({ limit: 100 });
 
-            // Merge backend data with local modifications
+            // Merge backend data with local modifications (read via ref — stable identity)
             const mergedAlerts = data.map(alert => {
-                const localMod = localModifications[alert.id];
+                const localMod = localModificationsRef.current[alert.id];
                 return localMod ? { ...alert, ...localMod } : alert;
             });
 
@@ -197,7 +226,7 @@ const handleRunPlaybook = async () => {
             setLoading(false);
             setRefreshing(false);
         }
-    }, [localModifications]);
+    }, []); // stable — reads localModifications via ref
 
     // Filter and search alerts
     const filteredAlerts = alerts.filter(alert => {
@@ -228,8 +257,8 @@ const handleRunPlaybook = async () => {
     useEffect(() => {
         loadAlerts();
 
-        // Auto-refresh every 10 seconds
-        const interval = setInterval(loadAlerts, 10000);
+        // Auto-refresh every 30 seconds — WS push handles real-time updates
+        const interval = setInterval(loadAlerts, 30000);
         return () => clearInterval(interval);
     }, [loadAlerts]);
 
@@ -238,8 +267,12 @@ const handleRunPlaybook = async () => {
             <div className="flex items-center justify-between shrink-0">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Security Alerts</h1>
-                    <p className="text-muted-foreground mt-1">
+                    <p className="text-muted-foreground mt-1 flex items-center gap-2">
                         {loading ? 'Loading alerts...' : `${filteredAlerts.length} of ${alerts.length} ${alerts.length === 1 ? 'alert' : 'alerts'} ${severityFilter || statusFilter || searchQuery ? 'shown' : 'detected'}`}
+                        <span className="flex items-center gap-1 text-xs">
+                            <span className={wsConnected ? 'text-green-500' : 'text-yellow-500'}>●</span>
+                            {wsConnected ? 'Live' : 'Reconnecting…'}
+                        </span>
                     </p>
                 </div>
                 <div className="flex flex-col items-end gap-1.5">

@@ -8,7 +8,8 @@ import { ArrowRight, Send, Loader2, CheckCircle2, AlertTriangle, Shield } from '
 import { Modal } from '../components/ui/Modal';
 import { Alert } from '../types';
 import { cn } from '../lib/utils';
-import { fetchRealtimeMetrics, fetchMetrics, RealtimeComponent, fetchAlerts } from '../services/api';
+import { fetchRealtimeMetrics, fetchMetrics, RealtimeComponent, fetchAlerts, BackendAlert, transformBackendAlert } from '../services/api';
+import { useWebSocket } from '../hooks/useWebSocket';
 import ReactMarkdown from 'react-markdown';
 
 
@@ -159,8 +160,23 @@ const Dashboard: React.FC = () => {
     // Live severity counts for the Threats bar chart
     const [severityCounts, setSeverityCounts] = useState({ CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 });
 
-    // Single 5 s poller — fetches alerts + severity metrics in parallel to avoid
-    // two independent intervals hitting the backend on the same cadence.
+    // WebSocket push — new alerts and metrics arrive instantly
+    const { connected: wsConnected } = useWebSocket<{ metrics: { alerts_by_severity: typeof severityCounts } }>(
+        'metrics_updated',
+        (msg) => setSeverityCounts(msg.metrics.alerts_by_severity)
+    );
+
+    useWebSocket<{ alert: BackendAlert }>(
+        'new_alert',
+        (msg) => {
+            const alert = transformBackendAlert(msg.alert);
+            if (['critical', 'high'].includes(alert.severity)) {
+                setLiveAlerts(prev => [alert, ...prev.filter(a => a.id !== alert.id)].slice(0, 10));
+            }
+        }
+    );
+
+    // Single 30 s poller — fallback for initial load and missed WS frames
     useEffect(() => {
         let isMounted = true;
 
@@ -173,10 +189,14 @@ const Dashboard: React.FC = () => {
             if (!isMounted) return;
 
             if (alertsResult.status === 'fulfilled') {
-                const highPriority = alertsResult.value.filter(
+                const fetched = alertsResult.value.filter(
                     a => ['critical', 'high'].includes(a.severity)
                 );
-                setLiveAlerts(highPriority);
+                setLiveAlerts(prev => {
+                    const fetchedIds = new Set(fetched.map(a => a.id));
+                    // Fetched wins for ID collisions; preserve WS-only alerts not yet in the fetch
+                    return [...fetched, ...prev.filter(a => !fetchedIds.has(a.id))].slice(0, 10);
+                });
             }
             setAlertsLoading(false);
 
@@ -186,7 +206,7 @@ const Dashboard: React.FC = () => {
         };
 
         poll();
-        const id = setInterval(poll, 5000);
+        const id = setInterval(poll, 30000);
         return () => { isMounted = false; clearInterval(id); };
     }, []);
 
@@ -330,7 +350,8 @@ const handleSystemCheck = () => {
                 <div>
                     <h1 className="text-lg font-bold tracking-tight">Dashboard</h1>
                     <p className="text-[10px] text-muted-foreground">
-                        <span className="text-green-500">● Online</span> • {new Date().toLocaleDateString()}
+                        <span className={wsConnected ? 'text-green-500' : 'text-yellow-500'}>●</span>
+                        {' '}{wsConnected ? 'Live' : 'Reconnecting…'} • {new Date().toLocaleDateString()}
                     </p>
                 </div>
                 <div className="flex gap-2">
