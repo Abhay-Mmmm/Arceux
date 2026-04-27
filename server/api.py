@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
@@ -30,6 +30,7 @@ from models import SecurityLog, Alert, MetricsSummary, Severity
 from storage import storage
 from detection_engine import detection_engine
 from agents.crew_system import run_agent_analysis
+from websocket_manager import manager as ws_manager, set_main_loop
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -99,6 +100,21 @@ async def process_pending_signals():
                 storage.mark_signal_processed(signal.signal_id)
                 print(f"[OK] Alert {alert.alert_id} created from signal {signal.signal_id}")
 
+                # Broadcast to all WS clients — fire-and-forget, never block detection
+                try:
+                    await ws_manager.broadcast({"type": "new_alert", "alert": alert.model_dump()})
+                    metrics = storage.get_metrics()
+                    await ws_manager.broadcast({
+                        "type": "metrics_updated",
+                        "metrics": {
+                            "alerts_by_severity": metrics["alerts_by_severity"],
+                            "total_alerts": metrics["total_alerts"],
+                            "total_logs": metrics["total_logs"],
+                        },
+                    })
+                except Exception:
+                    pass
+
             except Exception as e:
                 # Increment attempt counter on the signal dict (mutates in-place in storage.signals).
                 # Dead-letter after 3 failures so a malformed/deterministic-error signal
@@ -128,13 +144,12 @@ async def process_pending_signals():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle."""
-    # Start background task for processing signals
+    set_main_loop(asyncio.get_event_loop())
     task = asyncio.create_task(process_pending_signals())
     print("[OK] Background signal processor started")
-    
+
     yield
-    
-    # Shutdown
+
     task.cancel()
     print("[STOP] Background processor stopped")
 
@@ -275,6 +290,16 @@ async def update_alert_status(alert_id: str, update: AlertStatusUpdate):
         raise HTTPException(status_code=404, detail="Alert not found")
 
     alert_dict = storage.get_alert_by_id(alert_id)
+
+    try:
+        await ws_manager.broadcast({
+            "type": "alert_status_updated",
+            "alert_id": alert_id,
+            "status": update.status,
+        })
+    except Exception:
+        pass
+
     return Alert(**alert_dict)
 
 
@@ -624,6 +649,29 @@ async def get_realtime_metrics():
             "pending_signals": signal_rate
         }
     }
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# WebSocket Endpoint
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """Real-time push channel. Clients receive new_alert, metrics_updated,
+    agent_status_updated, alert_status_updated, and pipeline_completed events."""
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                if data == "ping":
+                    await websocket.send_json({"type": "pong"})
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "ping"})
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(websocket)
+    except Exception:
+        await ws_manager.disconnect(websocket)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

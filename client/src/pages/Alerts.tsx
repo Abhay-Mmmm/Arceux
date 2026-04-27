@@ -4,7 +4,8 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { X, Bot, Shield, FileText, Search, Filter, Loader2, RefreshCw, Download, Check } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { fetchAlerts, updateAlertStatus, executeAction, triggerAgentPipeline } from '../services/api';
+import { fetchAlerts, updateAlertStatus, executeAction, triggerAgentPipeline, BackendAlert, transformBackendAlert } from '../services/api';
+import { useWebSocket } from '../hooks/useWebSocket';
 
 const Alerts: React.FC = () => {
     const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -176,6 +177,24 @@ const handleRunPlaybook = async () => {
     }
 };
 
+// WebSocket push — new alerts and status changes arrive instantly
+    const { connected: wsConnected } = useWebSocket<{ alert: BackendAlert }>(
+        'new_alert',
+        (msg) => {
+            const alert = transformBackendAlert(msg.alert);
+            setAlerts(prev => prev.some(a => a.id === alert.id) ? prev : [alert, ...prev]);
+        }
+    );
+
+    useWebSocket<{ alert_id: string; status: string }>(
+        'alert_status_updated',
+        (msg) => {
+            setAlerts(prev =>
+                prev.map(a => a.id === msg.alert_id ? { ...a, status: msg.status as Alert['status'] } : a)
+            );
+        }
+    );
+
 // Fetch alerts from API
     const loadAlerts = useCallback(async () => {
         setRefreshing(true);
@@ -228,8 +247,8 @@ const handleRunPlaybook = async () => {
     useEffect(() => {
         loadAlerts();
 
-        // Auto-refresh every 10 seconds
-        const interval = setInterval(loadAlerts, 10000);
+        // Auto-refresh every 30 seconds — WS push handles real-time updates
+        const interval = setInterval(loadAlerts, 30000);
         return () => clearInterval(interval);
     }, [loadAlerts]);
 
@@ -238,8 +257,12 @@ const handleRunPlaybook = async () => {
             <div className="flex items-center justify-between shrink-0">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Security Alerts</h1>
-                    <p className="text-muted-foreground mt-1">
+                    <p className="text-muted-foreground mt-1 flex items-center gap-2">
                         {loading ? 'Loading alerts...' : `${filteredAlerts.length} of ${alerts.length} ${alerts.length === 1 ? 'alert' : 'alerts'} ${severityFilter || statusFilter || searchQuery ? 'shown' : 'detected'}`}
+                        <span className="flex items-center gap-1 text-xs">
+                            <span className={wsConnected ? 'text-green-500' : 'text-yellow-500'}>●</span>
+                            {wsConnected ? 'Live' : 'Reconnecting…'}
+                        </span>
                     </p>
                 </div>
                 <div className="flex flex-col items-end gap-1.5">

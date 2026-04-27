@@ -262,6 +262,43 @@ _AGENT_BUILDERS: Dict[str, Any] = {
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# WS Broadcast Helpers (sync context)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _broadcast_agent_states() -> None:
+    """Push current agent states to all WS clients (fire-and-forget)."""
+    try:
+        from websocket_manager import broadcast_sync
+        from storage import storage as _s
+        states = _s.get_all_agent_states()
+        for state in states:
+            count = state.get("execution_count", 0)
+            total_ms = state.get("total_execution_time_ms", 0)
+            state["avg_execution_time_ms"] = (total_ms // count) if count > 0 else 0
+        broadcast_sync({
+            "type": "agent_status_updated",
+            "agents": states,
+            "last_signal_type": _s.last_signal_type,
+        })
+    except Exception:
+        pass
+
+
+def _broadcast_pipeline_completed(signal_type: str, agents_ran: int, elapsed_ms: int) -> None:
+    """Push pipeline_completed event to all WS clients (fire-and-forget)."""
+    try:
+        from websocket_manager import broadcast_sync
+        broadcast_sync({
+            "type": "pipeline_completed",
+            "signal_type": signal_type,
+            "agents_ran": agents_ran,
+            "elapsed_ms": elapsed_ms,
+        })
+    except Exception:
+        pass
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Crew Orchestration
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -295,6 +332,7 @@ def run_agent_analysis(signal: DetectionSignal) -> Dict[str, Any]:
         for name in selected_names:
             _storage.update_agent_state(name, {"status": "running", "last_run": start_iso})
         _storage.last_signal_type = signal_type
+        _broadcast_agent_states()
 
     try:
         agents: List[Agent] = []
@@ -331,6 +369,8 @@ def run_agent_analysis(signal: DetectionSignal) -> Dict[str, Any]:
                     "total_execution_time_ms": state.get("total_execution_time_ms", 0) + elapsed_ms,
                     "last_execution_trace": trace_lines,
                 })
+            _broadcast_agent_states()
+            _broadcast_pipeline_completed(signal_type, len(selected_names), elapsed_ms)
 
         return {
             "success": True,
@@ -344,6 +384,7 @@ def run_agent_analysis(signal: DetectionSignal) -> Dict[str, Any]:
         if _has_storage:
             for name in selected_names:
                 _storage.update_agent_state(name, {"status": "error"})
+            _broadcast_agent_states()
         return {
             "success": False,
             "agent_trace": selected_names,

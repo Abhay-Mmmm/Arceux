@@ -12,7 +12,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 // Types matching backend API
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-interface BackendAlert {
+export interface BackendAlert {
     alert_id: string;
     timestamp: string;
     user: string;
@@ -45,7 +45,7 @@ interface Metrics {
 /**
  * Convert backend alert to frontend format
  */
-function transformBackendAlert(backendAlert: BackendAlert): Alert {
+export function transformBackendAlert(backendAlert: BackendAlert): Alert {
     // Map severity
     const severityMap: Record<string, 'critical' | 'high' | 'medium' | 'low'> = {
         'CRITICAL': 'critical',

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { fetchAgentStatus, AgentStatus } from '../services/api';
+import { useWebSocket } from '../hooks/useWebSocket';
 import {
     Target, ShieldAlert, BrainCircuit, GitBranch, FileText, Zap,
     Cpu, RefreshCw, Clock, CheckCircle, WifiOff,
@@ -270,6 +271,22 @@ const AgentInsights: React.FC = () => {
 
     const everLoadedRef = useRef(false);
 
+    // WebSocket push — agent states and pipeline events arrive instantly
+    const { connected: wsConnected } = useWebSocket<{ agents: AgentStatus[]; last_signal_type: string | null }>(
+        'agent_status_updated',
+        (msg) => {
+            setAgents(prev => compareAgentLists(prev, msg.agents) ? prev : msg.agents);
+            setLastSignalType(msg.last_signal_type);
+            everLoadedRef.current = true;
+            setPollFailed(false);
+        }
+    );
+
+    useWebSocket<{ signal_type: string; agents_ran: number; elapsed_ms: number }>(
+        'pipeline_completed',
+        (msg) => setLastSignalType(msg.signal_type)
+    );
+
     const loadAgents = useCallback(async () => {
         try {
             const data = await fetchAgentStatus();
@@ -291,7 +308,7 @@ const AgentInsights: React.FC = () => {
 
     useEffect(() => {
         loadAgents();
-        const id = setInterval(loadAgents, 3000);
+        const id = setInterval(loadAgents, 15000);
         return () => clearInterval(id);
     }, [loadAgents]);
 
@@ -374,7 +391,11 @@ const AgentInsights: React.FC = () => {
                 <div>
                     <h1 className="text-xl font-bold tracking-tight">Agent Architecture</h1>
                     <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">
-                        Autonomous threat processing pipeline — 3 s polling
+                        Autonomous threat processing pipeline — 15 s polling
+                        <span className="flex items-center gap-1">
+                            <span className={wsConnected ? 'text-green-500' : 'text-yellow-500'}>●</span>
+                            {wsConnected ? 'Live' : 'Reconnecting…'}
+                        </span>
                         {pollFailed && (
                             <span className="flex items-center gap-1 text-red-400/60">
                                 <WifiOff className="h-2.5 w-2.5" /> backend unreachable
