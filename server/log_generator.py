@@ -291,25 +291,19 @@ def generate_log() -> Dict[str, Any]:
 
 
 def send_log(log: Dict[str, Any]) -> bool:
-    """
-    Send log to ingestion API.
-
-    Args:
-        log: The log event to send
-
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        response = requests.post(
-            INGESTION_URL,
-            json=log,
-            timeout=2
-        )
-        return response.status_code == 200
-    except requests.exceptions.RequestException as e:
-        print(f"⚠️  Failed to send log: {e}")
-        return False
+    """Send a pre-built log dict. Retries twice, logs detection signals and failures."""
+    for attempt in range(2):
+        try:
+            resp = requests.post(INGESTION_URL, json=log, timeout=5)
+            if resp.status_code == 200:
+                if resp.json().get("status") == "detected":
+                    print(f"[DETECT] Detection: {resp.json().get('signal_type')}")
+                return True
+        except Exception:
+            if attempt < 1:
+                time.sleep(0.5)
+    print("[LOG GENERATOR] WARNING: Failed to send log after 2 attempts — server may be unavailable")
+    return False
 
 
 GRAPH_SEQUENCES = [
@@ -325,7 +319,10 @@ GRAPH_SEQUENCE_INTERVAL = 25
 
 def run_generator():
     """Main loop: generate and send logs continuously."""
-    wait_for_server()
+    global _server_start_time
+    if not wait_for_server():
+        # Timeout: anchor warmup guard from now, not from module import time
+        _server_start_time = time.time()
 
     print("🔥 Arceux Log Generator Started")
     print(f"📡 Sending logs to: {INGESTION_URL}")

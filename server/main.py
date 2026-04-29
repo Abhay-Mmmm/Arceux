@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 from typing import Optional
 import uvicorn
 import random
-import requests
 
 # litellm serializes Groq responses against OpenAI Pydantic models — field-count
 # mismatches produce harmless UserWarnings that flood the console. Suppress them.
@@ -40,6 +39,8 @@ from log_generator import (
     generate_coordinated_probe_sequence,
     generate_hub_asset_pressure_sequence,
     generate_ip_reuse_sequence,
+    wait_for_server,
+    _post_log,
     INGESTION_URL,
 )
 
@@ -64,12 +65,12 @@ def run_log_generator():
     print("\n[LOG GENERATOR] Starting...")
     print(f"[TARGET] [LOG GENERATOR] Target: {INGESTION_URL}")
     print(f"[INTERVAL] [LOG GENERATOR] Interval: 1-3 seconds\n")
-    
+
     log_count = 0
-    
-    # Wait for API to be ready
-    time.sleep(3)
-    
+
+    # Wait for API to be ready before sending any logs
+    wait_for_server()
+
     while not shutdown_event.is_set():
         try:
             # Attack sequence probabilities:
@@ -87,15 +88,8 @@ def run_log_generator():
                 for b_log in burst:
                     if shutdown_event.is_set():
                         break
-                    try:
-                        response = requests.post(INGESTION_URL, json=b_log, timeout=2)
-                        if response.status_code == 200:
-                            log_count += 1
-                            data = response.json()
-                            if data.get("status") == "detected":
-                                print(f"[DETECT] Detection: {data.get('signal_type')}")
-                    except requests.exceptions.RequestException:
-                        pass
+                    if _post_log(b_log):
+                        log_count += 1
                     time.sleep(0.4)
             elif r < 0.25:
                 seq = generate_insider_threat_sequence()
@@ -103,15 +97,8 @@ def run_log_generator():
                 for s_log in seq:
                     if shutdown_event.is_set():
                         break
-                    try:
-                        response = requests.post(INGESTION_URL, json=s_log, timeout=2)
-                        if response.status_code == 200:
-                            log_count += 1
-                            data = response.json()
-                            if data.get("status") == "detected":
-                                print(f"[DETECT] Detection: {data.get('signal_type')}")
-                    except requests.exceptions.RequestException:
-                        pass
+                    if _post_log(s_log):
+                        log_count += 1
                     time.sleep(1.0)  # slight gap so timestamps are ordered
             elif r < 0.33:
                 threading.Thread(
@@ -131,26 +118,9 @@ def run_log_generator():
                 ).start()
             else:
                 log = generate_log()
-
-                # Print condensed log info
                 print(f"[LOG] [{log_count + 1:04d}] {log['event_type']:20s} | {log['user']:30s} | {log['location']}")
-
-                # Send to ingestion API
-                try:
-                    response = requests.post(
-                        INGESTION_URL,
-                        json=log,
-                        timeout=2
-                    )
-                    if response.status_code == 200:
-                        log_count += 1
-                        # Show if detection occurred
-                        data = response.json()
-                        if data.get("status") == "detected":
-                            print(f"[DETECT] Detection: {data.get('signal_type')}")
-                except requests.exceptions.RequestException:
-                    # API busy, minimal noise
-                    pass
+                if _post_log(log):
+                    log_count += 1
 
             # Random interval
             time.sleep(random.uniform(1, 3))

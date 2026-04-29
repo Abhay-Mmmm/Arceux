@@ -228,6 +228,9 @@ async def get_alerts(
     - severity: Filter by severity (LOW/MEDIUM/HIGH/CRITICAL)
     - limit: Max number of alerts to return
     """
+    if limit <= 0:
+        raise HTTPException(status_code=400, detail="limit must be a positive integer")
+
     if severity:
         try:
             sev = Severity(severity.upper())
@@ -236,7 +239,7 @@ async def get_alerts(
             raise HTTPException(status_code=400, detail="Invalid severity level")
     else:
         alerts = storage.get_all_alerts()
-    
+
     # Convert to Alert objects, newest first, apply limit
     alert_objects = [Alert(**alert) for alert in reversed(alerts[-limit:])]
 

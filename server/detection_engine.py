@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from collections import defaultdict, deque
 from models import SecurityLog, DetectionSignal, SignalType, Severity
 
@@ -62,9 +62,11 @@ class DetectionEngine:
     def analyze(self, log: SecurityLog) -> Optional[DetectionSignal]:
         """Analyze a single log and return a signal if a rule matches."""
 
-        # Graph and River learn from every event so their models stay current.
-        # Rule signals take priority; River is the first fallback; Graph is the last.
-        graph_signal = self.graph_detector.update(log) if self.graph_detector is not None else None
+        # Graph ingests every event so edges stay current regardless of which detector fires.
+        # Pattern checking is deferred to the end so cooldowns are only consumed when the
+        # graph signal is actually returned. River learns and scores every event too.
+        if self.graph_detector is not None:
+            self.graph_detector.ingest(log)
         river_signal = self.river_detector.detect(log) if self.river_detector is not None else None
 
         # ── Rule 1: Brute Force ──────────────────────────────────────────
@@ -134,8 +136,10 @@ class DetectionEngine:
             cohort = river_signal.metadata.get("cohort", "?")
             print(f"[RIVER] Score {score:.3f} → ANOMALOUS_ACCESS for {local[:4]}*** ({cohort})")
             return river_signal
-        # Rule 8: Graph ML — fallback when River also missed
-        return graph_signal
+        # Rule 8: Graph ML — pattern check only when no rule or River signal fired
+        if self.graph_detector is not None:
+            return self.graph_detector.check_patterns(log)
+        return None
 
     # ── Detection Methods ────────────────────────────────────────────────
 
@@ -377,8 +381,8 @@ class RiverAnomalyDetector:
         features = self._extract_features(log, now)
 
         with self._locks[cohort]:
-            self._models[cohort].learn_one(features)
             score: float = self._models[cohort].score_one(features)
+            self._models[cohort].learn_one(features)
 
         if score >= self._threshold:
             # Redact PII: show only the first 4 chars of the local part
@@ -427,7 +431,7 @@ class GraphThreatDetector:
         self._window = window_seconds
         self._lock = threading.Lock()
         self._edge_timestamps: list = []  # (ts, u, v, key)
-        self._last_signal_time: Dict[str, float] = {}
+        self._last_signal_time: Dict[Tuple[str, str], float] = {}
 
         try:
             import networkx as nx
@@ -438,8 +442,8 @@ class GraphThreatDetector:
             self._available = False
             print("[GRAPH] WARNING: networkx not installed. Graph threat detection disabled.")
 
-    def _cooldown_ok(self, pattern: str) -> bool:
-        return (time.time() - self._last_signal_time.get(pattern, 0.0)) >= self.SIGNAL_COOLDOWN
+    def _cooldown_ok(self, pattern: str, entity_id: str) -> bool:
+        return (time.time() - self._last_signal_time.get((pattern, entity_id), 0.0)) >= self.SIGNAL_COOLDOWN
 
     def _prune_old_edges(self) -> None:
         cutoff = time.time() - self._window
@@ -454,20 +458,21 @@ class GraphThreatDetector:
                 fresh.append((ts, u, v, key))
         self._edge_timestamps = fresh
 
-    def _add_edge(self, u: str, v: str) -> None:
-        key = self._graph.add_edge(u, v)
+    def _add_edge(self, u: str, v: str, **attrs) -> None:
+        key = self._graph.add_edge(u, v, **attrs)
         self._edge_timestamps.append((time.time(), u, v, key))
 
     def _check_lateral_movement(self, log: SecurityLog) -> Optional[DetectionSignal]:
-        """Same IP connecting to 3+ distinct users."""
-        if not self._cooldown_ok("lateral_movement"):
+        """Same IP authenticating as 3+ distinct users via successful login."""
+        if not self._cooldown_ok("lateral_movement", log.ip):
             return None
         ip_node = f"ip:{log.ip}"
         if ip_node not in self._graph:
             return None
-        targets = {v for _, v in self._graph.out_edges(ip_node) if v.startswith("user:")}
+        targets = {v for _, v, d in self._graph.out_edges(ip_node, data=True)
+                   if v.startswith("user:") and d.get("event_type") in ("successful_login", "new_country_login")}
         if len(targets) >= 3:
-            self._last_signal_time["lateral_movement"] = time.time()
+            self._last_signal_time[("lateral_movement", log.ip)] = time.time()
             return DetectionSignal(
                 signal_id=str(uuid.uuid4()),
                 signal_type=SignalType.SUSPICIOUS_LOGIN,
@@ -489,15 +494,16 @@ class GraphThreatDetector:
         return None
 
     def _check_coordinated_probe(self, log: SecurityLog) -> Optional[DetectionSignal]:
-        """3+ distinct IPs targeting the same user."""
-        if not self._cooldown_ok("coordinated_probe"):
+        """3+ distinct IPs targeting the same user via failed login."""
+        if not self._cooldown_ok("coordinated_probe", log.user):
             return None
         user_node = f"user:{log.user}"
         if user_node not in self._graph:
             return None
-        sources = {u for u, _ in self._graph.in_edges(user_node) if u.startswith("ip:")}
+        sources = {u for u, _, d in self._graph.in_edges(user_node, data=True)
+                   if u.startswith("ip:") and d.get("event_type") == "failed_login"}
         if len(sources) >= 3:
-            self._last_signal_time["coordinated_probe"] = time.time()
+            self._last_signal_time[("coordinated_probe", log.user)] = time.time()
             return DetectionSignal(
                 signal_id=str(uuid.uuid4()),
                 signal_type=SignalType.BRUTE_FORCE,
@@ -518,17 +524,18 @@ class GraphThreatDetector:
         return None
 
     def _check_hub_asset_pressure(self, log: SecurityLog) -> Optional[DetectionSignal]:
-        """3+ distinct users accessing the same asset."""
+        """3+ distinct users accessing the same asset via data_download."""
         if not log.asset:
             return None
-        if not self._cooldown_ok("hub_asset_pressure"):
+        if not self._cooldown_ok("hub_asset_pressure", log.asset):
             return None
         asset_node = f"asset:{log.asset}"
         if asset_node not in self._graph:
             return None
-        accessors = {u for u, _ in self._graph.in_edges(asset_node) if u.startswith("user:")}
+        accessors = {u for u, _, d in self._graph.in_edges(asset_node, data=True)
+                     if u.startswith("user:") and d.get("event_type") == "data_download"}
         if len(accessors) >= 3:
-            self._last_signal_time["hub_asset_pressure"] = time.time()
+            self._last_signal_time[("hub_asset_pressure", log.asset)] = time.time()
             return DetectionSignal(
                 signal_id=str(uuid.uuid4()),
                 signal_type=SignalType.ANOMALOUS_ACCESS,
@@ -550,15 +557,16 @@ class GraphThreatDetector:
         return None
 
     def _check_ip_reuse(self, log: SecurityLog) -> Optional[DetectionSignal]:
-        """Same IP shared by 2+ distinct users."""
-        if not self._cooldown_ok("ip_reuse"):
+        """Same IP shared by 2+ distinct users via successful login."""
+        if not self._cooldown_ok("ip_reuse", log.ip):
             return None
         ip_node = f"ip:{log.ip}"
         if ip_node not in self._graph:
             return None
-        sharing = {v for _, v in self._graph.out_edges(ip_node) if v.startswith("user:")}
+        sharing = {v for _, v, d in self._graph.out_edges(ip_node, data=True)
+                   if v.startswith("user:") and d.get("event_type") in ("successful_login", "new_country_login")}
         if len(sharing) >= 2:
-            self._last_signal_time["ip_reuse"] = time.time()
+            self._last_signal_time[("ip_reuse", log.ip)] = time.time()
             return DetectionSignal(
                 signal_id=str(uuid.uuid4()),
                 signal_type=SignalType.SUSPICIOUS_LOGIN,
@@ -579,24 +587,25 @@ class GraphThreatDetector:
             )
         return None
 
-    def update(self, log: SecurityLog) -> Optional[DetectionSignal]:
-        """Update the graph from this event. Return highest-severity signal if a pattern fires."""
+    def ingest(self, log: SecurityLog) -> None:
+        """Add graph edges for this event — always called on every log."""
         if not self._available:
-            return None
-
+            return
         with self._lock:
             self._prune_old_edges()
-
             ip_node = f"ip:{log.ip}"
             user_node = f"user:{log.user}"
-
             if log.event_type in ("failed_login", "successful_login", "new_country_login"):
-                self._add_edge(ip_node, user_node)
-
+                self._add_edge(ip_node, user_node, event_type=log.event_type)
             if log.event_type in ("data_download", "privilege_escalation") and log.asset:
-                self._add_edge(user_node, f"asset:{log.asset}")
+                self._add_edge(user_node, f"asset:{log.asset}", event_type=log.event_type)
 
-            candidates = []
+    def check_patterns(self, log: SecurityLog) -> Optional[DetectionSignal]:
+        """Check structural patterns — called only when no rule or River signal fired."""
+        if not self._available:
+            return None
+        candidates = []
+        with self._lock:
             for check_fn in (
                 self._check_lateral_movement,
                 self._check_coordinated_probe,
@@ -606,7 +615,6 @@ class GraphThreatDetector:
                 sig = check_fn(log)
                 if sig:
                     candidates.append(sig)
-
         if not candidates:
             return None
         _rank = {Severity.CRITICAL: 0, Severity.HIGH: 1, Severity.MEDIUM: 2, Severity.LOW: 3}

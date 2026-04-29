@@ -427,7 +427,7 @@ VITE_API_URL=http://localhost:8000
 **Python dependencies** — `server/requirements.txt`:
 ```
 fastapi, uvicorn[standard], pydantic, crewai, litellm, groq,
-python-dotenv, requests, aiohttp<3.10, river==0.23.0, networkx>=3.0, pytest
+python-dotenv, requests, aiohttp>=3.10, river==0.23.0, networkx>=3.0, pytest
 (websockets is transitively provided by uvicorn[standard])
 ```
 
