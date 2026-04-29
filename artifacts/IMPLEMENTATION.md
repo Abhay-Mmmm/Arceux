@@ -1,7 +1,7 @@
 # Arceux — Implementation Overview
 
-**Version:** 1.0.0  
-**Last Updated:** 2026-04-27  
+**Version:** 1.1.2  
+**Last Updated:** 2026-04-29  
 **Status:** Active Development — Early Prototype
 
 ---
@@ -18,6 +18,7 @@
 | AI Chatbot | Groq API (`groq` SDK, `llama-3.1-8b-instant`) — dedicated key (`GROQ_API_KEY_CHAT`) |
 | AI Agents | CrewAI + LiteLLM (`groq/llama-3.3-70b-versatile`) — signal-type routed, per-agent keys |
 | ML Detection | River 0.23.0 (`HalfSpaceTrees`) — online anomaly detection, no retraining |
+| Graph Detection | NetworkX ≥3.0 (`MultiDiGraph`) — structural threat patterns on ip/user/asset graph |
 | Real-time | WebSocket (FastAPI/Starlette built-in) — server push |
 | Storage | Purely in-memory (no disk persistence) |
 | Async | Python asyncio + threading |
@@ -43,7 +44,7 @@ Arceux/
 │   ├── main.py                    # Orchestrator/entry point
 │   ├── chatbot.py                 # Groq chatbot + template fallback
 │   ├── agents/crew_system.py      # CrewAI 6-agent system (Groq via LiteLLM)
-│   ├── detection_engine.py        # Rule-based threat detection (6 rules)
+│   ├── detection_engine.py        # Rule + ML + Graph threat detection (8 rules)
 │   ├── storage.py                 # Thread-safe in-memory store
 │   ├── models.py                  # Pydantic data models
 │   └── log_generator.py           # Synthetic log generator + attack sequences
@@ -165,7 +166,7 @@ Keepalive: client sends `"ping"` string every 25 s; server replies `{"type":"pon
 - `try/finally` always resets `pipeline_running = False` and updates `last_pipeline_run = time.time()`.
 
 #### Detection Engine (`server/detection_engine.py`)
-Six stateful rule-based detectors using per-user sliding windows:
+Eight detectors: 6 stateful rule-based, 1 online ML (River), 1 graph-structural (NetworkX). All run on every event; rules take priority, River is the first fallback, Graph is the last.
 
 | # | Rule | Trigger | Severity | Signal Type |
 |---|------|---------|----------|-------------|
@@ -177,6 +178,7 @@ Six stateful rule-based detectors using per-user sliding windows:
 | 5 | **Insider Threat** | Privilege escalation → data download, same user | CRITICAL | `INSIDER_THREAT` |
 | 6 | **Data Exfiltration** | Downloads from 3+ different assets in 5 min | HIGH | `ANOMALOUS_ACCESS` |
 | 7 | **River ML (HST)** | Behavioral anomaly score ≥ threshold (default 0.75) | HIGH | `ANOMALOUS_ACCESS` |
+| 8 | **Graph ML** | Structural patterns on ip/user/asset graph (see below) | CRITICAL/HIGH | varies |
 
 **High-risk locations set:** `{"Russia", "North Korea", "Unknown", "Tor Exit Node", "Romania", "Iran"}`
 
@@ -222,6 +224,33 @@ n_trees=10, height=8, window_size=50, seed=42
 
 **Configuration:** `RIVER_ANOMALY_THRESHOLD=0.75` in `server/.env`.
 
+#### Graph-Based Threat Detector (`GraphThreatDetector`)
+
+Structural anomaly detection using a NetworkX `MultiDiGraph` that accumulates relationships between IP addresses, users, and assets over a rolling temporal window (default 5 minutes). Edges older than the window are pruned on every event.
+
+**Graph schema:**
+- `ip:{ip}` → `user:{user}` edge — added for `failed_login`, `successful_login`, `new_country_login`
+- `user:{user}` → `asset:{asset}` edge — added for `data_download`, `privilege_escalation`
+
+**Patterns detected:**
+
+| Pattern | Trigger | Severity | Signal Type |
+|---------|---------|----------|-------------|
+| **Lateral Movement** | Same IP → 3+ distinct users in window | CRITICAL | `SUSPICIOUS_LOGIN` |
+| **Coordinated Probe** | 3+ distinct IPs → same user in window | HIGH | `BRUTE_FORCE` |
+| **Hub Asset Pressure** | 3+ distinct users → same asset in window | HIGH | `ANOMALOUS_ACCESS` |
+| **IP Reuse** | Same IP shared by 2+ distinct users in window | HIGH | `SUSPICIOUS_LOGIN` |
+
+When multiple patterns fire on the same event, the highest-severity signal is returned. A 60-second per-pattern cooldown prevents alert floods.
+
+**Execution order:** `update()` is called at the very top of `analyze()` (before any rule check) so the graph always reflects the latest event. The resulting `graph_signal` is only returned as the final fallback if no rule or River signal fired.
+
+**Graceful degradation:** If `networkx` is not installed, `GraphThreatDetector._available` is `False` and `DetectionEngine.graph_detector` is set to `None`. All 7 existing detectors continue normally.
+
+**Demo injection:** Graph attack sequences are injected by the log generator at configurable probabilities (8 % + 7 % + 5 % + 5 % = 25 % of cycles) to ensure all 4 patterns fire reliably during demos and testing. Each sequence uses safe locations so no rule-based signal fires first and suppresses the graph signal.
+
+**Configuration:** `GRAPH_WINDOW_SECONDS=300` (rolling window in seconds) in `server/.env`.
+
 #### 6-Agent CrewAI System (`server/agents/crew_system.py`)
 Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteLLM / CrewAI LLM class):
 
@@ -257,12 +286,23 @@ Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteL
 - **Normal logs:** 6 users, 6 asset types, 5 event types with weighted distribution (50% successful_login, 25% failed_login, 15% data_download, 5% privilege_escalation, 5% new_country_login). Fires every 1–3 seconds.
 - **`generate_brute_force_burst()`:** 7 rapid failed logins from same user/IP/location. All arrive within ~3 seconds — guarantees BRUTE_FORCE trigger.
 - **`generate_insider_threat_sequence()`:** `privilege_escalation` followed 1 second later by `data_download` for the same user/asset — guarantees INSIDER_THREAT trigger.
+- **`generate_lateral_movement_sequence()`:** Same source IP authenticates as 3 distinct users (safe location, 0.5 s apart). Guarantees IP Reuse signal at user 2 and Lateral Movement signal at user 3. Runs in a background thread.
+- **`generate_coordinated_probe_sequence()`:** 3 distinct IPs each fire a `failed_login` against the same user (0.3 s apart, safe location). 3 failures stay below the Brute Force threshold (>5), guaranteeing a clean Coordinated Probe signal. Runs in a background thread.
+- **`generate_hub_asset_pressure_sequence()`:** 4 distinct users each post `data_download` to the same high-value asset (`customer-db` or `employee-records`, 0.3 s apart). All downloads target the same asset, so Data Exfiltration (3+ *different* assets) never fires — Hub Asset Pressure fires cleanly at user 3. Runs in a background thread.
+- **`generate_ip_reuse_sequence()`:** Same IP authenticates as 3 distinct users (safe location, 0.4 s apart). Distinct from the lateral movement sequence (different IP). Fires IP Reuse signal at user 2. Runs in a background thread.
+- **`wait_for_server()`:** Polls `GET /health` every 0.5 s before any logs are sent (standalone mode). Confirms HTTP 200, then sets `_server_start_time` and prints `[LOG GENERATOR] Server is ready. Starting.` Times out after 30 s with a visible WARNING rather than blocking forever.
+- **`_post_log()` retry logic:** Up to 2 attempts with a 0.5 s delay between them. Returns `bool`. If all retries fail, prints `[LOG GENERATOR] WARNING: Failed to post log after N attempts — server may be unavailable` so failures are never silent.
+- **30-second graph sequence warmup guard:** Each graph sequence function checks `time.time() - _server_start_time < 30` at entry and returns immediately if too early. `_server_start_time` is initialised to `time.time()` at module import (covers the `main.py` launch path where `wait_for_server()` is not called directly), and reset to the confirmed-ready time when `wait_for_server()` succeeds. This gives River ML time to warm up its baseline before graph attack patterns start firing.
 
 #### System Orchestrator (`server/main.py`)
 - **Attack sequence probabilities per cycle:**
   - 15% → brute-force burst
   - 10% → insider threat sequence
-  - 75% → normal random log
+  - 8%  → lateral movement sequence (background thread)
+  - 7%  → coordinated probe sequence (background thread)
+  - 5%  → hub asset pressure sequence (background thread)
+  - 5%  → ip reuse sequence (background thread)
+  - 50% → normal random log
 - Starts API server and log generator as daemon threads.
 - Runs background `process_pending_signals()` task.
 - Handles SIGINT/SIGTERM for graceful shutdown.
@@ -374,6 +414,9 @@ GROQ_MODEL_CHAT=llama-3.1-8b-instant        # Chatbot (fast + cheap)
 
 API_HOST=0.0.0.0
 API_PORT=8000
+
+# Graph detection
+GRAPH_WINDOW_SECONDS=300      # Rolling edge window (seconds)
 ```
 
 **Frontend** — `client/.env.local`:
@@ -384,7 +427,7 @@ VITE_API_URL=http://localhost:8000
 **Python dependencies** — `server/requirements.txt`:
 ```
 fastapi, uvicorn[standard], pydantic, crewai, litellm, groq,
-python-dotenv, requests, aiohttp<3.10, river==0.23.0, pytest
+python-dotenv, requests, aiohttp<3.10, river==0.23.0, networkx>=3.0, pytest
 (websockets is transitively provided by uvicorn[standard])
 ```
 
@@ -518,3 +561,17 @@ The core pipeline — log ingestion → 6-rule detection engine → CrewAI agent
 All alerts currently showing 80% is expected: the detection engine generates `HIGH` severity for Brute Force, Suspicious Login, Account Takeover, and Data Exfiltration — the four most frequently triggered rules. `CRITICAL` (95%) appears on Impossible Travel and Insider Threat; `MEDIUM` (60%) appears on failed-login probes from high-risk locations.
 
 *Files Changed:* None
+
+---
+
+### 2026-04-29 — Graph Sequences Firing Before Server Ready
+
+*Root Cause:* `_server_start_time` was not initialised, so graph sequences could fire the moment the log generator thread started — before Uvicorn had finished binding the port. `_post_log()` silently swallowed all `RequestException` failures with a bare `except: pass`, making dropped logs invisible. Two consequences: (1) the graph never accumulated enough edges to trigger a pattern, so `GraphThreatDetector` appeared broken; (2) River ML missed early training events because the same silent drop affected any log sent during the startup window.
+
+*Fix:*
+- **`wait_for_server()`** — new function that polls `GET /health` every 0.5 s (up to 30 s) before any log is sent. On success it resets `_server_start_time = time.time()` and prints `[LOG GENERATOR] Server is ready. Starting.` If timeout expires it warns and proceeds anyway. Called as the first action in `run_generator()` (standalone mode).
+- **`_server_start_time`** — module-level `float` initialised to `time.time()` at import. Covers the `main.py` launch path where `wait_for_server()` is never called directly; the 30-second guard still counts from module import time, which precedes all other startup work.
+- **30-second graph sequence guard** — each of the four graph sequence functions (`generate_lateral_movement_sequence`, `generate_coordinated_probe_sequence`, `generate_hub_asset_pressure_sequence`, `generate_ip_reuse_sequence`) returns immediately if `time.time() - _server_start_time < 30`. This gives River ML time to build a baseline before attack patterns start firing.
+- **`_post_log()` retry** — 2 attempts with 0.5 s between them; returns `bool`; if all retries fail prints `[LOG GENERATOR] WARNING: Failed to post log after N attempts — server may be unavailable`. Failures are now always visible.
+
+*Files Changed:* `server/log_generator.py`, `artifacts/IMPLEMENTATION.md`

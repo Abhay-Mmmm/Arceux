@@ -14,15 +14,34 @@ import signal
 import sys
 import threading
 import time
+import warnings
 from datetime import datetime, timezone
 from typing import Optional
 import uvicorn
 import random
 import requests
 
+# litellm serializes Groq responses against OpenAI Pydantic models — field-count
+# mismatches produce harmless UserWarnings that flood the console. Suppress them.
+warnings.filterwarnings(
+    "ignore",
+    message="Pydantic serializer warnings",
+    category=UserWarning,
+    module="pydantic",
+)
+
 # Import all components
 from models import SecurityLog
-from log_generator import generate_log, generate_brute_force_burst, generate_insider_threat_sequence, INGESTION_URL
+from log_generator import (
+    generate_log,
+    generate_brute_force_burst,
+    generate_insider_threat_sequence,
+    generate_lateral_movement_sequence,
+    generate_coordinated_probe_sequence,
+    generate_hub_asset_pressure_sequence,
+    generate_ip_reuse_sequence,
+    INGESTION_URL,
+)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Global state
@@ -54,9 +73,13 @@ def run_log_generator():
     while not shutdown_event.is_set():
         try:
             # Attack sequence probabilities:
-            #   15% → brute-force burst (7 rapid failed logins)
-            #   10% → insider threat sequence (escalation → download)
-            #   75% → normal random log
+            #   15% → brute_force_burst        (7 rapid failed logins, same user)
+            #   10% → insider_threat_sequence  (escalation → download, same user)
+            #    8% → lateral_movement         (same IP → 3 users → IP_REUSE + LATERAL_MOVEMENT)
+            #    7% → coordinated_probe        (3 IPs → same user → COORDINATED_PROBE)
+            #    5% → hub_asset_pressure       (4 users → same asset → HUB_ASSET_PRESSURE)
+            #    5% → ip_reuse                 (same IP → 3 users → IP_REUSE)
+            #   50% → normal random log
             r = random.random()
             if r < 0.15:
                 burst = generate_brute_force_burst()
@@ -90,6 +113,22 @@ def run_log_generator():
                     except requests.exceptions.RequestException:
                         pass
                     time.sleep(1.0)  # slight gap so timestamps are ordered
+            elif r < 0.33:
+                threading.Thread(
+                    target=generate_lateral_movement_sequence, daemon=True
+                ).start()
+            elif r < 0.40:
+                threading.Thread(
+                    target=generate_coordinated_probe_sequence, daemon=True
+                ).start()
+            elif r < 0.45:
+                threading.Thread(
+                    target=generate_hub_asset_pressure_sequence, daemon=True
+                ).start()
+            elif r < 0.50:
+                threading.Thread(
+                    target=generate_ip_reuse_sequence, daemon=True
+                ).start()
             else:
                 log = generate_log()
 

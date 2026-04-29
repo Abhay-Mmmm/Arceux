@@ -194,8 +194,8 @@ const Dashboard: React.FC = () => {
                 );
                 setLiveAlerts(prev => {
                     const fetchedIds = new Set(fetched.map(a => a.id));
-                    // Fetched wins for ID collisions; preserve WS-only alerts not yet in the fetch
-                    return [...fetched, ...prev.filter(a => !fetchedIds.has(a.id))].slice(0, 10);
+                    // WS-only alerts are newer than the last poll — keep them at the top
+                    return [...prev.filter(a => !fetchedIds.has(a.id)), ...fetched].slice(0, 10);
                 });
             }
             setAlertsLoading(false);

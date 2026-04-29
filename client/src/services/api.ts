@@ -72,12 +72,13 @@ export function transformBackendAlert(backendAlert: BackendAlert): Alert {
     const firstEvent = backendAlert.raw_events?.[0] || {};
     const asset = firstEvent.asset || backendAlert.metadata?.asset || 'unknown';
 
-    // Confidence: River ML score takes priority; fall back to severity-based estimate
+    // Confidence: use backend-computed value when present (set by every detection rule,
+    // River ML, and graph patterns); fall back to severity estimate only as last resort.
     const mappedSeverity = severityMap[backendAlert.severity] || 'medium';
     const severityConfidence: Record<string, number> = { critical: 95, high: 80, medium: 60, low: 40 };
     const confidence =
-        backendAlert.metadata?.river_ml === true && backendAlert.metadata?.anomaly_score != null
-            ? Math.max(0, Math.min(100, Math.round(backendAlert.metadata.anomaly_score * 100)))
+        backendAlert.metadata?.confidence != null
+            ? Math.max(0, Math.min(100, backendAlert.metadata.confidence))
             : severityConfidence[mappedSeverity];
 
     // Build trace from agent_trace

@@ -237,9 +237,9 @@ async def get_alerts(
     else:
         alerts = storage.get_all_alerts()
     
-    # Convert to Alert objects and apply limit
-    alert_objects = [Alert(**alert) for alert in alerts[-limit:]]
-    
+    # Convert to Alert objects, newest first, apply limit
+    alert_objects = [Alert(**alert) for alert in reversed(alerts[-limit:])]
+
     return alert_objects
 
 
