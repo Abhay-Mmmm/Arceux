@@ -16,9 +16,8 @@ INGESTION_URL = "http://localhost:8000/logs"
 HEALTH_URL = "http://localhost:8000/health"
 EVENT_INTERVAL = (1, 3)  # seconds
 
-# Set at module import so the 30-second graph warmup guard works even when
-# wait_for_server() is never called (e.g. when launched via main.py).
-_server_start_time: float = time.time()
+# 0.0 = server not yet confirmed ready; set by wait_for_server() on success.
+_server_start_time: float = 0.0
 
 # Synthetic Data Pools
 USERS = [
@@ -169,7 +168,7 @@ def generate_lateral_movement_sequence() -> None:
     Safe location prevents Suspicious Login rule from firing first and
     discarding the graph signal.
     """
-    if time.time() - _server_start_time < 30:
+    if _server_start_time == 0.0 or time.time() - _server_start_time < 30:
         return
 
     shared_ip = generate_ip()
@@ -193,7 +192,7 @@ def generate_coordinated_probe_sequence() -> None:
     3 failures stay below the Brute Force threshold (>5 per user in 2 min),
     so no rule-based signal fires first.
     """
-    if time.time() - _server_start_time < 30:
+    if _server_start_time == 0.0 or time.time() - _server_start_time < 30:
         return
 
     target_user = random.choice(USERS)
@@ -216,7 +215,7 @@ def generate_hub_asset_pressure_sequence() -> None:
     All downloads go to the SAME asset, so the Data Exfiltration rule (which
     fires on 3+ DIFFERENT assets for one user) never triggers.
     """
-    if time.time() - _server_start_time < 30:
+    if _server_start_time == 0.0 or time.time() - _server_start_time < 30:
         return
 
     hub_asset = random.choice(["customer-db", "employee-records"])
@@ -239,7 +238,7 @@ def generate_ip_reuse_sequence() -> None:
     Uses a fresh random IP distinct from the lateral movement sequence, and
     safe locations so no rule fires before the graph signal can surface.
     """
-    if time.time() - _server_start_time < 30:
+    if _server_start_time == 0.0 or time.time() - _server_start_time < 30:
         return
 
     shared_ip = generate_ip()
@@ -319,10 +318,8 @@ GRAPH_SEQUENCE_INTERVAL = 25
 
 def run_generator():
     """Main loop: generate and send logs continuously."""
-    global _server_start_time
     if not wait_for_server():
-        # Timeout: anchor warmup guard from now, not from module import time
-        _server_start_time = time.time()
+        return
 
     print("🔥 Arceux Log Generator Started")
     print(f"📡 Sending logs to: {INGESTION_URL}")
