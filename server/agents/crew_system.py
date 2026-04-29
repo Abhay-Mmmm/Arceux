@@ -107,7 +107,7 @@ def _build_orchestrator(signal: DetectionSignal) -> Tuple[Agent, Task]:
         goal="Coordinate the incident response lifecycle and manage global incident context",
         backstory="SOC Incident Commander. Direct the team efficiently. See the big picture.",
         verbose=False,
-        allow_delegation=True,
+        allow_delegation=False,
         max_iter=1,
         memory=False,
         **_llm_kwargs(name),
