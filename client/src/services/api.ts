@@ -4,7 +4,7 @@
  * Handles all communication with the backend API
  */
 
-import { Alert } from '../types';
+import { Alert, ComplianceStatus } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -376,6 +376,15 @@ export async function triggerAgentPipeline(alertId?: string): Promise<{ success:
         console.error('Failed to trigger agent pipeline:', error);
         throw error;
     }
+}
+
+/**
+ * Fetch dynamic compliance posture from alert data
+ */
+export async function fetchComplianceStatus(): Promise<ComplianceStatus> {
+    const response = await fetch(`${API_BASE_URL}/compliance/status`);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+    return await response.json();
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

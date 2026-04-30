@@ -12,6 +12,22 @@ class ArceuxWebSocket {
     private listeners: Map<string, Set<(data: unknown) => void>> = new Map();
     private pingInterval: ReturnType<typeof setInterval> | null = null;
     private _connected: boolean = false;
+    private _conversationHistory: Array<{ role: string; content: string }> = [];
+
+    getConversationHistory(): Array<{ role: string; content: string }> {
+        return this._conversationHistory;
+    }
+
+    addToConversationHistory(role: string, content: string): void {
+        this._conversationHistory.push({ role, content });
+        if (this._conversationHistory.length > 20) {
+            this._conversationHistory = this._conversationHistory.slice(-20);
+        }
+    }
+
+    clearConversationHistory(): void {
+        this._conversationHistory = [];
+    }
 
     constructor(url: string) {
         this.url = url;

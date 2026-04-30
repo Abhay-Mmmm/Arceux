@@ -138,19 +138,18 @@ class ArceuxStorage:
                     return True
         return False
 
-    def add_alert_note(self, alert_id: str, note: str) -> bool:
-        """Append a note to an alert's metadata.notes list."""
+    def add_alert_note(self, alert_id: str, note: str) -> Dict[str, Any]:
+        """Append a note to an alert's explanation field."""
         with self._lock:
             for alert in self.alerts:
                 if alert["alert_id"] == alert_id:
-                    if "notes" not in alert.setdefault("metadata", {}):
-                        alert["metadata"]["notes"] = []
-                    alert["metadata"]["notes"].append({
-                        "text": note,
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
-                    return True
-        return False
+                    status_changed = False
+                    alert["explanation"] = alert.get("explanation", "") + note
+                    if alert.get("status") == "open":
+                        alert["status"] = "investigating"
+                        status_changed = True
+                    return {"success": True, "status_changed": status_changed, "alert": alert.copy()}
+        return {"success": False, "status_changed": False, "alert": None}
 
     def add_executed_action(self, action: Dict[str, Any]) -> None:
         """Log an executed response action."""

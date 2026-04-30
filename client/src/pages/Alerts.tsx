@@ -6,8 +6,17 @@ import { X, Bot, Shield, FileText, Search, Filter, Loader2, RefreshCw, Download,
 import { cn } from '../lib/utils';
 import { fetchAlerts, updateAlertStatus, executeAction, triggerAgentPipeline, BackendAlert, transformBackendAlert } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { useLocation } from 'react-router-dom';
 
 const Alerts: React.FC = () => {
+    const location = useLocation();
+    const pendingFocusId = useRef<string | null>(null);
+
+    useEffect(() => {
+        if (location.state?.focusAlertId) {
+            pendingFocusId.current = location.state.focusAlertId;
+        }
+    }, [location.state]);
     const [alerts, setAlerts] = useState<Alert[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -29,6 +38,17 @@ const Alerts: React.FC = () => {
 
     // Derive selectedAlert from alerts array to ensure it's always in sync
     const selectedAlert = selectedAlertId ? alerts.find(a => a.id === selectedAlertId) || null : null;
+
+    useEffect(() => {
+        if (pendingFocusId.current && alerts.length > 0) {
+            const target = alerts.find(a => a.id === pendingFocusId.current);
+            if (target) {
+                setSelectedAlertId(target.id);
+                pendingFocusId.current = null;
+                window.history.replaceState({}, '');
+            }
+        }
+    }, [alerts]);
 
     // Filter states
     const [severityFilter, setSeverityFilter] = useState<string | null>(null);
@@ -111,6 +131,16 @@ const Alerts: React.FC = () => {
                 parameters: { action_text: action },
             });
             setActionStates(prev => ({ ...prev, [key]: 'done' }));
+            
+            // Optimistic update status to investigating
+            if (selectedAlert.status === 'open') {
+                setAlerts(prev =>
+                    prev.map(a => a.id === selectedAlert.id ? { ...a, status: 'investigating' as const } : a)
+                );
+            }
+                    prev.map(a => a.id === selectedAlert.id ? { ...a, status: 'investigating' as const } : a)
+                );
+            }
         } catch (err) {
 console.error('Failed to execute action:', err);
     setActionStates(prev => ({ ...prev, [key]: 'error' }));

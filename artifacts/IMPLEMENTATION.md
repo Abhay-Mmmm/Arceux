@@ -1,7 +1,7 @@
 # Arceux — Implementation Overview
 
-**Version:** 1.1.2  
-**Last Updated:** 2026-04-29  
+**Version:** 1.4.0
+**Last Updated:** 2026-04-30  
 **Status:** Active Development — Early Prototype
 
 ---
@@ -63,7 +63,7 @@ Arceux/
 - **High Priority Alerts Feed:** Receives new high/critical alerts instantly via `new_alert` WebSocket push; falls back to polling every 30 seconds. Shows severity badges, timestamps, and opens a modal on click.
 - **System Perf Card:** Dynamic CPU / Memory / Network bars driven by live backend data — CPU scales with total component event throughput, Memory scales with alert backlog pressure, Network is inverse of average latency. Bars animate with `transition-all duration-700` and color-shift green → yellow → red at 60% and 85%.
 - **Threat Severity Chart:** Real-time bar chart (Recharts) showing distribution across CRITICAL / HIGH / MEDIUM / LOW. Updated instantly via `metrics_updated` WebSocket push; polls `GET /metrics` every 30 seconds as fallback. Chart data derived from `alerts_by_severity` via `useMemo`. Uses `isAnimationActive={false}` to prevent the bar-grow animation from replaying on each update. `allowDecimals={false}` on YAxis. No static fallback — starts at zero until first poll resolves.
-- **Compliance Card:** Static status badges for SOC 2, ISO 27001, GDPR, IRDAI, PCI DSS.
+- **Compliance Card:** Dynamic status badges driven by `GET /compliance/status`. Polls every 60 seconds; updates instantly via `compliance_updated` WebSocket push (fired after every new alert and every `PATCH /alerts/{id}/status`). IRDAI shows a live client-side countdown timer ("X h Y m remaining") when `action_required`, turning red under 60 min and pulsing under 30 min. Skeleton badges shown during initial load. Reason string exposed as a `title` tooltip on hover. Status maps to badge variants: `compliant → healthy (green)`, `review_needed → degraded (yellow)`, `action_required → down (red)`.
 - **Modal Dialogs:** Alert Intelligence modal (AI trace + recommendations), Service Diagnostics modal (latency history), System Check modal (live backend data).
 
 #### Alerts Page (`client/src/pages/Alerts.tsx`)
@@ -119,6 +119,7 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
 - `executeAction({ action_type, alert_id, parameters })` — calls `POST /actions/execute`.
 - `fetchAgentStatus()` — calls `GET /agents/status`; returns `{ agents: AgentStatus[], last_signal_type: string | null }`.
 - `triggerAgentPipeline(alertId?)` — calls `POST /agents/trigger` with body `{ alert_id: alertId | null }`.
+- `fetchComplianceStatus()` — calls `GET /compliance/status`; returns typed `ComplianceStatus` object.
 - `transformBackendAlert()` (exported) — `confidence` field is dynamic: River ML anomaly score × 100 (clamped 0–100) when `metadata.river_ml` is true; severity-based fallback (`critical=95, high=80, medium=60, low=40`) otherwise.
 - `BackendAlert` interface (exported) — used by WS `new_alert` handlers in pages to transform server-push payloads.
 
@@ -128,6 +129,19 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
 ---
 
 ### Backend
+
+#### Compliance Status (`server/api.py` — `compute_compliance_status`)
+- `GET /compliance/status` endpoint returns live posture for five regulations
+- Pure `compute_compliance_status(storage)` function — no side effects, easy to unit-test
+- Dynamic status computation: `action_required | review_needed | compliant` per regulation
+- **IRDAI** — `action_required` when any unresolved CRITICAL alert within 6 h; includes `time_remaining_minutes = max(0, 360 − elapsed)` and `triggered_by` alert ID
+- **GDPR** — `action_required` when any unresolved CRITICAL/HIGH `INSIDER_THREAT` or `ANOMALOUS_ACCESS` alert within 72 h; includes `time_remaining_minutes = max(0, 4320 − elapsed)`
+- **SOC 2** — scales with total unresolved count (0 → compliant, 1–4 → review, 5+ → action)
+- **ISO 27001** — driven by highest unresolved severity (CRITICAL → action, HIGH → review)
+- **PCI DSS** — `action_required` when data-breach signal targets assets containing "payment" or "customer"
+- `compliance_updated` WebSocket event broadcast after every `storage.add_alert()` and every `PATCH /alerts/{id}/status`
+- Frontend polls `GET /compliance/status` every 60 seconds as fallback; `compliance_updated` push makes it near-instant in practice
+- IRDAI live countdown timer on Dashboard: client-side `setInterval(60 000)` ticks down from `time_remaining_minutes` using elapsed time since last fetch; red < 60 min, pulsing < 30 min
 
 #### API (`server/api.py`)
 | Endpoint | Status |
@@ -139,6 +153,7 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
 | `POST /actions/execute` | ✅ Execute response action (block_ip, reset_credentials) |
 | `GET /agents/status` | ✅ All 6 agent states with stats + `last_signal_type` top-level field |
 | `POST /agents/trigger` | ✅ Queue pipeline run; optional body `{ "alert_id": "..." }` — if provided runs on that alert, otherwise latest |
+| `GET /compliance/status` | ✅ Dynamic compliance posture for IRDAI, GDPR, SOC 2, ISO 27001, PCI DSS — computed from live unresolved alerts via pure `compute_compliance_status(storage)` |
 | `GET /metrics` | ✅ Summary (totals, by-severity, recent activity) |
 | `GET /metrics/realtime` | ✅ Component health + latency history |
 | `POST /chat` | ✅ Free-form or quick-action chat (Groq + template fallback) |
@@ -157,6 +172,7 @@ Complete rewrite with React performance optimizations to eliminate yellow-flash 
 | `alert_status_updated` | After `PATCH /alerts/{id}/status` | `{ type, alert_id, status }` |
 | `agent_status_updated` | After each agent state change in crew_system | `{ type, agents: [...], last_signal_type }` |
 | `pipeline_completed` | After crew.kickoff() completes | `{ type, signal_type, agents_ran, elapsed_ms }` |
+| `compliance_updated` | After `storage.add_alert()` and after `PATCH /alerts/{id}/status` | `{ type, compliance: <ComplianceStatus> }` |
 
 Keepalive: client sends `"ping"` string every 25 s; server replies `{"type":"pong"}`. Server sends `{"type":"ping"}` if no message received within 30 s. Dead connections cleaned up after failed send via `asyncio.gather(return_exceptions=True)`.
 
@@ -273,7 +289,7 @@ Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteL
 | `ANOMALOUS_ACCESS` | Alert Handler, Root Cause, Compliance |
 | DEFAULT | Alert Handler, Threat Analyzer |
 
-**Per-agent API keys** — each agent reads its own key (`GROQ_API_KEY_ORCHESTRATOR`, etc.) with fallback to `GROQ_API_KEY`. Key prefix logged on startup for verification.
+**Per-agent API keys** — each agent reads its own key (`GROQ_API_KEY_ORCHESTRATOR`, etc.) with fallback to `GROQ_API_KEY`. Key configured flag logged on startup for verification.
 
 **Output limits** — every Agent has `max_iter=1`, `memory=False`. Every Task has a strict word-count cap in its `expected_output` (60–100 words). Crew runs with `verbose=False`.
 
@@ -320,10 +336,13 @@ Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteL
 `EventType`, `SecurityLog`, `Severity`, `SignalType`, `DetectionSignal`, `Alert`, `MetricsSummary`, `ThreatAnalysis`, `ContextEnrichment` — all Pydantic models.
 
 #### Chatbot (`server/chatbot.py`)
-- Live Groq calls using `llama-3.1-8b-instant` (fast, low token cost) via `GROQ_API_KEY_CHAT` (fallback: `GROQ_API_KEY`).
-- Key prefix logged on startup for verification.
-- Quick-action prompts: `explain_last`, `threat_summary`, `recommend_actions`, `system_status`.
-- Template fallback when key is missing or call fails.
+- **Rich system prompt** establishes Arceux AI as a senior SOC analyst for a financial institution with deep expertise in threat detection, MITRE ATT&CK, financial sector attack patterns, and regulatory compliance (IRDAI, GDPR, SOC 2, PCI DSS).
+- **Dynamic context injection** — every Groq call includes real system state: 10 most recent alerts (sorted by severity), agent pipeline status, total alert counts by severity, pipeline running state, and last signal type. Context is built directly from `ArceuxStorage` at call time.
+- **Quick actions (`explain_last`, `threat_summary`, `recommend_actions`, `system_status`)** send focused prompts to Groq rather than returning templates. Each prompt instructs the model to include specific analytical elements (MITRE ATT&CK mapping, compliance deadlines, prioritization by urgency).
+- **Free-form questions** are sent directly to Groq with context injected — no keyword routing or classification. The 8B model handles everything naturally.
+- **Multi-turn conversation support** — `POST /chat` accepts optional `conversation_history` list of `{role, content}` pairs. Last 12 messages (6 exchanges) are included in context, enabling follow-up questions like "tell me more about that user."
+- **Groq configuration:** `llama-3.1-8b-instant` via `GROQ_API_KEY_CHAT` (falls back to `GROQ_API_KEY`). Temperature 0.3, max tokens 400. Key configured flag logged on startup.
+- **Data-driven fallbacks** — when Groq is unavailable (rate limit, network, missing key), responses are constructed from real storage data rather than generic templates. Each quick action has its own fallback format pulling actual alert/agent/pipeline data.
 
 ---
 
@@ -373,7 +392,7 @@ Each agent and the chatbot can be assigned a dedicated Groq API key from a separ
 |----------|---------------|-----------------|
 | `Dashboard.tsx` — System Check modal | Fake progress animation (0→100% over 1.2s) | None |
 | `Dashboard.tsx` — Service details | Uptime 99.99%, error rate 0.001% are static strings | None |
-| `Dashboard.tsx` — Compliance card | SOC 2 / ISO 27001 / GDPR / IRDAI / PCI DSS badges always static | None |
+| `Dashboard.tsx` — Compliance card | dynamic (polling + WS updates) | None |
 | `AgentInsights.tsx` | CPU load bar driven by agent status, not real CPU metrics | None |
 | `api.py` — realtime metrics | Latency values are partially randomized per request | None |
 | `data/mock.ts` | 5 sample alerts + 6 component definitions — offline fallback only; never shown when backend is reachable | `GET /alerts`, `GET /metrics/realtime` |
@@ -575,3 +594,19 @@ All alerts currently showing 80% is expected: the detection engine generates `HI
 - **`_post_log()` retry** — 2 attempts with 0.5 s between them; returns `bool`; if all retries fail prints `[LOG GENERATOR] WARNING: Failed to post log after N attempts — server may be unavailable`. Failures are now always visible.
 
 *Files Changed:* `server/log_generator.py`, `artifacts/IMPLEMENTATION.md`
+
+---
+
+### 2026-04-30 — Chatbot Loses Conversation, Review Button Navigation, and Alert Action Persistence
+
+*Root Cause:* 
+1. `Dashboard.tsx` used local React state for the chatbot conversation, causing messages to be lost on page navigation.
+2. The "Review Immediately" button inside the `Dashboard.tsx` modal was treated as a regular chatbot query rather than a navigation hook to the specific alert.
+3. Backend `execute_action` appended notes to `metadata.notes` which the frontend ignored, rather than updating `explanation`. It also failed to update the alert status to "investigating".
+
+*Fix:*
+- **Chatbot Persistence:** Migrated the `messages` array into the singleton `ArceuxWebSocket` instance (`arceuxWS.getConversationHistory()`) so it persists across page unmounts.
+- **Review Immediately Navigation:** Modified `handleActionClick` in `Dashboard.tsx` to detect "review immediately" or "verify user" actions and navigate directly to `/alerts` passing `{ focusAlertId: alert.id }`. Added an effect in `Alerts.tsx` to read `location.state` and automatically open the target alert.
+- **Action Execution Fix:** Updated `api.py` and `storage.py` to correctly append execution notes directly to `alert["explanation"]` with line breaks. Also explicitly set the alert status to "investigating" on the backend and added optimistic UI updates for the "Execute" button in the frontend.
+
+*Files Changed:* `client/src/pages/Dashboard.tsx`, `client/src/pages/Alerts.tsx`, `client/src/services/websocket.ts`, `server/api.py`, `server/storage.py`, `artifacts/IMPLEMENTATION.md`
