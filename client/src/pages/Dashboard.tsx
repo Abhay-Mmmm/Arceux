@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
@@ -100,10 +100,15 @@ const SEVERITY_COLORS = {
 };
 
 const Dashboard: React.FC = () => {
+    const chatBottomRef = useRef<HTMLDivElement>(null);
     const [chatInput, setChatInput] = useState('');
     const [messages, setMessages] = useState<{ role: 'user' | 'ai', content: JSX.Element | string }[]>([
-        { role: 'ai', content: <>Checking system logs... Detected anomalous root access attempt on <strong>db-shard-04</strong>. Suggest immediate isolation.</> }
+        { role: 'ai', content: <>Hello. I'm <strong>Arceux AI</strong>, your SOC analyst assistant. Ask me about active alerts, threat patterns, or use the quick actions below to get started.</> }
     ]);
+    useEffect(() => {
+        chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [showSystemCheck, setShowSystemCheck] = useState(false);
     const [checkProgress, setCheckProgress] = useState(0);
@@ -249,20 +254,32 @@ const handleSystemCheck = () => {
     const handleSendMessage = async () => {
         if (!chatInput.trim()) return;
         const userMessage = chatInput;
+
         setMessages(prev => [...prev, { role: 'user' as const, content: userMessage }]);
         setChatInput('');
 
-        // Show loading state
         setMessages(prev => [...prev, {
             role: 'ai',
             content: <>Thinking<Loader2 className="h-3 w-3 animate-spin inline ml-1" />...</>
         }]);
 
+        // Build history from messages before the current turn — backend appends userMessage itself
+        const conversationHistory = messages
+            .filter(msg => typeof msg.content === 'string')
+            .slice(-12)
+            .map(msg => ({
+                role: msg.role === 'user' ? 'user' : 'assistant',
+                content: typeof msg.content === 'string' ? msg.content : ''
+            }));
+
         try {
             const response = await fetch('http://localhost:8000/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: userMessage })
+                body: JSON.stringify({
+                    message: userMessage,
+                    conversation_history: conversationHistory
+                })
             });
 
             const data = await response.json();
@@ -298,6 +315,14 @@ const handleSystemCheck = () => {
             system_status: 'System status',
         };
 
+        const conversationHistory = messages
+            .filter(msg => typeof msg.content === 'string')
+            .slice(-12)
+            .map(msg => ({
+                role: msg.role === 'user' ? 'user' : 'assistant',
+                content: typeof msg.content === 'string' ? msg.content : ''
+            }));
+
         setMessages(prev => [
             ...prev,
             { role: 'user' as const, content: labelMap[action] ?? action },
@@ -311,7 +336,11 @@ const handleSystemCheck = () => {
             const response = await fetch('http://localhost:8000/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: '', quick_action: action })
+                body: JSON.stringify({
+                    message: '',
+                    quick_action: action,
+                    conversation_history: conversationHistory
+                })
             });
 
             const data = await response.json();
@@ -504,6 +533,7 @@ const handleSystemCheck = () => {
                                         </div>
                                     </div>
                                 ))}
+                                <div ref={chatBottomRef} />
                             </div>
 
                             {/* Quick Actions */}

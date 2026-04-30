@@ -1,7 +1,7 @@
 # Arceux — Implementation Overview
 
-**Version:** 1.1.2  
-**Last Updated:** 2026-04-29  
+**Version:** 1.2.0
+**Last Updated:** 2026-04-30  
 **Status:** Active Development — Early Prototype
 
 ---
@@ -320,10 +320,13 @@ Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteL
 `EventType`, `SecurityLog`, `Severity`, `SignalType`, `DetectionSignal`, `Alert`, `MetricsSummary`, `ThreatAnalysis`, `ContextEnrichment` — all Pydantic models.
 
 #### Chatbot (`server/chatbot.py`)
-- Live Groq calls using `llama-3.1-8b-instant` (fast, low token cost) via `GROQ_API_KEY_CHAT` (fallback: `GROQ_API_KEY`).
-- Key prefix logged on startup for verification.
-- Quick-action prompts: `explain_last`, `threat_summary`, `recommend_actions`, `system_status`.
-- Template fallback when key is missing or call fails.
+- **Rich system prompt** establishes Arceux AI as a senior SOC analyst for a financial institution with deep expertise in threat detection, MITRE ATT&CK, financial sector attack patterns, and regulatory compliance (IRDAI, GDPR, SOC 2, PCI DSS).
+- **Dynamic context injection** — every Groq call includes real system state: 10 most recent alerts (sorted by severity), agent pipeline status, total alert counts by severity, pipeline running state, and last signal type. Context is built directly from `ArceuxStorage` at call time.
+- **Quick actions (`explain_last`, `threat_summary`, `recommend_actions`, `system_status`)** send focused prompts to Groq rather than returning templates. Each prompt instructs the model to include specific analytical elements (MITRE ATT&CK mapping, compliance deadlines, prioritization by urgency).
+- **Free-form questions** are sent directly to Groq with context injected — no keyword routing or classification. The 8B model handles everything naturally.
+- **Multi-turn conversation support** — `POST /chat` accepts optional `conversation_history` list of `{role, content}` pairs. Last 12 messages (6 exchanges) are included in context, enabling follow-up questions like "tell me more about that user."
+- **Groq configuration:** `llama-3.1-8b-instant` via `GROQ_API_KEY_CHAT` (falls back to `GROQ_API_KEY`). Temperature 0.3, max tokens 400. Key prefix logged on startup.
+- **Data-driven fallbacks** — when Groq is unavailable (rate limit, network, missing key), responses are constructed from real storage data rather than generic templates. Each quick action has its own fallback format pulling actual alert/agent/pipeline data.
 
 ---
 
