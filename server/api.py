@@ -356,7 +356,18 @@ async def execute_action(request: ExecuteActionRequest):
         "timestamp": timestamp,
         "parameters": request.parameters,
     })
-    storage.add_alert_note(request.alert_id, note)
+    result = storage.add_alert_note(request.alert_id, note)
+    
+    if result.get("status_changed"):
+        await ws_manager.broadcast({
+            "type": "alert_status_updated",
+            "alert_id": request.alert_id,
+            "status": "investigating"
+        })
+        await ws_manager.broadcast({
+            "type": "compliance_updated",
+            "compliance": compute_compliance_status(storage),
+        })
 
     return {
         "success": True,

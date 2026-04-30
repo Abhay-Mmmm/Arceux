@@ -20,7 +20,7 @@ try:
     if _api_key:
         _groq_client = Groq(api_key=_api_key)
         GROQ_AVAILABLE = True
-        print(f"Groq chatbot initialised ({_model_name}, key: {_api_key[:8]}...)")
+        print(f"Groq chatbot initialised ({_model_name}, key configured: {bool(_api_key)})")
     else:
         print("No chat API key set — chatbot using data fallback")
 except ImportError:

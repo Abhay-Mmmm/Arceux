@@ -289,7 +289,7 @@ Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteL
 | `ANOMALOUS_ACCESS` | Alert Handler, Root Cause, Compliance |
 | DEFAULT | Alert Handler, Threat Analyzer |
 
-**Per-agent API keys** — each agent reads its own key (`GROQ_API_KEY_ORCHESTRATOR`, etc.) with fallback to `GROQ_API_KEY`. Key prefix logged on startup for verification.
+**Per-agent API keys** — each agent reads its own key (`GROQ_API_KEY_ORCHESTRATOR`, etc.) with fallback to `GROQ_API_KEY`. Key configured flag logged on startup for verification.
 
 **Output limits** — every Agent has `max_iter=1`, `memory=False`. Every Task has a strict word-count cap in its `expected_output` (60–100 words). Crew runs with `verbose=False`.
 
@@ -341,7 +341,7 @@ Signal-type routed pipeline powered by Groq (`llama-3.3-70b-versatile` via LiteL
 - **Quick actions (`explain_last`, `threat_summary`, `recommend_actions`, `system_status`)** send focused prompts to Groq rather than returning templates. Each prompt instructs the model to include specific analytical elements (MITRE ATT&CK mapping, compliance deadlines, prioritization by urgency).
 - **Free-form questions** are sent directly to Groq with context injected — no keyword routing or classification. The 8B model handles everything naturally.
 - **Multi-turn conversation support** — `POST /chat` accepts optional `conversation_history` list of `{role, content}` pairs. Last 12 messages (6 exchanges) are included in context, enabling follow-up questions like "tell me more about that user."
-- **Groq configuration:** `llama-3.1-8b-instant` via `GROQ_API_KEY_CHAT` (falls back to `GROQ_API_KEY`). Temperature 0.3, max tokens 400. Key prefix logged on startup.
+- **Groq configuration:** `llama-3.1-8b-instant` via `GROQ_API_KEY_CHAT` (falls back to `GROQ_API_KEY`). Temperature 0.3, max tokens 400. Key configured flag logged on startup.
 - **Data-driven fallbacks** — when Groq is unavailable (rate limit, network, missing key), responses are constructed from real storage data rather than generic templates. Each quick action has its own fallback format pulling actual alert/agent/pipeline data.
 
 ---
@@ -392,7 +392,7 @@ Each agent and the chatbot can be assigned a dedicated Groq API key from a separ
 |----------|---------------|-----------------|
 | `Dashboard.tsx` — System Check modal | Fake progress animation (0→100% over 1.2s) | None |
 | `Dashboard.tsx` — Service details | Uptime 99.99%, error rate 0.001% are static strings | None |
-| `Dashboard.tsx` — Compliance card | SOC 2 / ISO 27001 / GDPR / IRDAI / PCI DSS badges always static | None |
+| `Dashboard.tsx` — Compliance card | dynamic (polling + WS updates) | None |
 | `AgentInsights.tsx` | CPU load bar driven by agent status, not real CPU metrics | None |
 | `api.py` — realtime metrics | Latency values are partially randomized per request | None |
 | `data/mock.ts` | 5 sample alerts + 6 component definitions — offline fallback only; never shown when backend is reachable | `GET /alerts`, `GET /metrics/realtime` |

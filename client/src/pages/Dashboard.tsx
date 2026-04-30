@@ -188,7 +188,7 @@ const Dashboard: React.FC = () => {
     const [messages, setMessages] = useState<{ role: 'user' | 'ai', content: JSX.Element | string }[]>(() => {
         const history = arceuxWS.getConversationHistory();
         if (history.length > 0) {
-            return history.map(msg => ({ role: msg.role as 'user' | 'ai', content: msg.content }));
+            return history.map(msg => ({ role: msg.role === 'assistant' ? 'ai' : msg.role as 'user' | 'ai', content: msg.content }));
         }
         return [
             { role: 'ai', content: <>Hello. I'm <strong>Arceux AI</strong>, your SOC analyst assistant. Ask me about active alerts, threat patterns, or use the quick actions below to get started.</> }
