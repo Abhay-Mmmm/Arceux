@@ -115,6 +115,10 @@ async def process_pending_signals():
                             "total_logs": metrics["total_logs"],
                         },
                     })
+                    await ws_manager.broadcast({
+                        "type": "compliance_updated",
+                        "compliance": compute_compliance_status(storage),
+                    })
                 except Exception as e:
                     _logger.debug("alert broadcast failed", exc_info=e)
 
@@ -303,6 +307,10 @@ async def update_alert_status(alert_id: str, update: AlertStatusUpdate):
             "alert_id": alert_id,
             "status": update.status,
         })
+        await ws_manager.broadcast({
+            "type": "compliance_updated",
+            "compliance": compute_compliance_status(storage),
+        })
     except Exception as e:
         _logger.debug("alert_status_updated broadcast failed", exc_info=e)
 
@@ -331,14 +339,14 @@ async def execute_action(request: ExecuteActionRequest):
 
     if request.action_type == "block_ip":
         storage.blocked_ips.add(alert_ip)
-        note = f"[ACTION] IP {alert_ip} blocked at {timestamp}"
+        note = f"\n[ACTION] IP {alert_ip} blocked at {timestamp}"
         message = f"IP {alert_ip} has been blocked. Network team notified."
     elif request.action_type == "reset_credentials":
         storage.flagged_users.add(alert_user)
-        note = f"[ACTION] Credentials for user '{alert_user}' flagged for reset at {timestamp}"
+        note = f"\n[ACTION] Credentials reset for {alert_user} at {timestamp}"
         message = f"Credentials for user '{alert_user}' flagged for reset. Identity team notified."
     else:
-        note = f"[ACTION] {request.action_type} executed at {timestamp}"
+        note = f"\n[ACTION] {request.action_type} executed at {timestamp}"
         message = f"Action '{request.action_type}' logged successfully."
 
     storage.add_executed_action({
@@ -428,6 +436,193 @@ async def trigger_agent_pipeline(body: TriggerPipelineRequest):
         "success": True,
         "message": f"Pipeline queued for user '{target.get('user', 'unknown')}'. Updates visible in ~5 s.",
     }
+
+
+def _parse_alert_time(ts: str) -> datetime:
+    """Parse ISO timestamp, always returning a timezone-aware UTC datetime."""
+    try:
+        dt = datetime.fromisoformat(ts)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def compute_compliance_status(storage) -> dict:
+    """Pure function — computes compliance posture from storage data. No side effects."""
+    now = datetime.now(timezone.utc)
+    all_alerts = storage.get_all_alerts()
+    unresolved = [a for a in all_alerts if a.get("status", "open") != "resolved"]
+
+    def minutes_since(ts: str) -> float:
+        return (now - _parse_alert_time(ts)).total_seconds() / 60
+
+    def get_asset(alert: dict) -> str:
+        raw = alert.get("raw_events", [])
+        return raw[0].get("asset", "") if raw else alert.get("metadata", {}).get("asset", "")
+
+    # ── IRDAI (6-hour deadline for CRITICAL) ──────────────────────────────────
+    irdai_critical = [
+        a for a in unresolved
+        if a.get("severity") == "CRITICAL" and minutes_since(a["timestamp"]) <= 360
+    ]
+    irdai_high = [
+        a for a in unresolved
+        if a.get("severity") == "HIGH" and minutes_since(a["timestamp"]) <= 1440
+    ]
+    if irdai_critical:
+        trigger = max(irdai_critical, key=lambda a: a["timestamp"])
+        elapsed = minutes_since(trigger["timestamp"])
+        remaining = max(0.0, 360 - elapsed)
+        irdai = {
+            "status": "action_required",
+            "reason": (
+                f"CRITICAL incident detected {int(elapsed)} min ago — "
+                f"IRDAI requires reporting within 6 hours ({int(remaining)} min remaining)"
+            ),
+            "deadline_hours": 6,
+            "time_remaining_minutes": int(remaining),
+            "triggered_by": trigger["alert_id"],
+        }
+    elif irdai_high:
+        irdai = {
+            "status": "review_needed",
+            "reason": "HIGH severity incidents require IRDAI assessment",
+            "deadline_hours": None,
+            "time_remaining_minutes": None,
+            "triggered_by": None,
+        }
+    else:
+        irdai = {
+            "status": "compliant",
+            "reason": "No reportable incidents in last 24 hours",
+            "deadline_hours": None,
+            "time_remaining_minutes": None,
+            "triggered_by": None,
+        }
+
+    # ── GDPR (72-hour deadline for data-breach signal types) ─────────────────
+    DATA_BREACH_TYPES = {"INSIDER_THREAT", "ANOMALOUS_ACCESS"}
+    gdpr_action = [
+        a for a in unresolved
+        if a.get("severity") in ("CRITICAL", "HIGH")
+        and a.get("threat_type") in DATA_BREACH_TYPES
+        and minutes_since(a["timestamp"]) <= 4320
+    ]
+    gdpr_review = [
+        a for a in unresolved
+        if a.get("threat_type") == "SUSPICIOUS_LOGIN"
+        and minutes_since(a["timestamp"]) <= 2880
+    ]
+    if gdpr_action:
+        trigger = max(gdpr_action, key=lambda a: a["timestamp"])
+        elapsed = minutes_since(trigger["timestamp"])
+        remaining = max(0.0, 4320 - elapsed)
+        gdpr = {
+            "status": "action_required",
+            "reason": (
+                f"Potential data breach detected — GDPR requires notification "
+                f"within 72 hours ({int(remaining)} min remaining)"
+            ),
+            "deadline_hours": 72,
+            "time_remaining_minutes": int(remaining),
+            "triggered_by": trigger["alert_id"],
+        }
+    elif gdpr_review:
+        gdpr = {
+            "status": "review_needed",
+            "reason": "Suspicious access patterns require GDPR assessment",
+            "deadline_hours": None,
+            "time_remaining_minutes": None,
+            "triggered_by": None,
+        }
+    else:
+        gdpr = {
+            "status": "compliant",
+            "reason": "No data breach indicators in last 72 hours",
+            "deadline_hours": None,
+            "time_remaining_minutes": None,
+            "triggered_by": None,
+        }
+
+    # ── SOC 2 (unresolved count) ──────────────────────────────────────────────
+    n = len(unresolved)
+    if n >= 5:
+        soc2 = {
+            "status": "action_required",
+            "reason": f"{n} unresolved security incidents require documentation per SOC 2 CC7.2",
+        }
+    elif n >= 1:
+        soc2 = {
+            "status": "review_needed",
+            "reason": f"{n} unresolved incident{'s' if n > 1 else ''} require SOC 2 review",
+        }
+    else:
+        soc2 = {
+            "status": "compliant",
+            "reason": "All incidents resolved — SOC 2 controls effective",
+        }
+
+    # ── ISO 27001 ─────────────────────────────────────────────────────────────
+    iso_critical = [a for a in unresolved if a.get("severity") == "CRITICAL"]
+    iso_high = [a for a in unresolved if a.get("severity") == "HIGH"]
+    if iso_critical:
+        iso27001 = {
+            "status": "action_required",
+            "reason": "CRITICAL incident requires ISO 27001 A.16 incident response procedure",
+        }
+    elif iso_high:
+        iso27001 = {
+            "status": "review_needed",
+            "reason": "HIGH severity incidents require ISO 27001 review",
+        }
+    else:
+        iso27001 = {
+            "status": "compliant",
+            "reason": "No major incidents — ISO 27001 controls maintained",
+        }
+
+    # ── PCI DSS ───────────────────────────────────────────────────────────────
+    pci_action = [
+        a for a in unresolved
+        if a.get("threat_type") in DATA_BREACH_TYPES
+        and any(kw in get_asset(a).lower() for kw in ("payment", "customer"))
+    ]
+    pci_review = [
+        a for a in unresolved
+        if a.get("severity") == "HIGH" and minutes_since(a["timestamp"]) <= 1440
+    ]
+    if pci_action:
+        pci_dss = {
+            "status": "action_required",
+            "reason": "Payment/customer data access incident requires PCI DSS forensic investigation",
+        }
+    elif pci_review:
+        pci_dss = {
+            "status": "review_needed",
+            "reason": "Security incidents require PCI DSS assessment",
+        }
+    else:
+        pci_dss = {
+            "status": "compliant",
+            "reason": "No payment data incidents detected",
+        }
+
+    return {
+        "irdai": irdai,
+        "gdpr": gdpr,
+        "soc2": soc2,
+        "iso27001": iso27001,
+        "pci_dss": pci_dss,
+        "last_updated": now.isoformat(),
+    }
+
+
+@app.get("/compliance/status")
+async def get_compliance_status():
+    """Compute dynamic compliance posture from current alert data."""
+    return compute_compliance_status(storage)
 
 
 @app.get("/metrics", response_model=MetricsSummary)

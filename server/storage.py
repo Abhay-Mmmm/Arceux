@@ -139,16 +139,13 @@ class ArceuxStorage:
         return False
 
     def add_alert_note(self, alert_id: str, note: str) -> bool:
-        """Append a note to an alert's metadata.notes list."""
+        """Append a note to an alert's explanation field."""
         with self._lock:
             for alert in self.alerts:
                 if alert["alert_id"] == alert_id:
-                    if "notes" not in alert.setdefault("metadata", {}):
-                        alert["metadata"]["notes"] = []
-                    alert["metadata"]["notes"].append({
-                        "text": note,
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
+                    alert["explanation"] = alert.get("explanation", "") + note
+                    if alert.get("status") == "open":
+                        alert["status"] = "investigating"
                     return True
         return False
 

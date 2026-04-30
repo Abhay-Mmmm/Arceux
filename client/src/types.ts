@@ -43,3 +43,20 @@ export interface ComplianceItem {
     status: 'compliant' | 'review_needed' | 'action_required';
     details?: string;
 }
+
+export interface ComplianceItemStatus {
+    status: 'action_required' | 'review_needed' | 'compliant';
+    reason: string;
+    deadline_hours?: number | null;
+    time_remaining_minutes?: number | null;
+    triggered_by?: string | null;
+}
+
+export interface ComplianceStatus {
+    irdai: ComplianceItemStatus;
+    gdpr: ComplianceItemStatus;
+    soc2: ComplianceItemStatus;
+    iso27001: ComplianceItemStatus;
+    pci_dss: ComplianceItemStatus;
+    last_updated: string;
+}

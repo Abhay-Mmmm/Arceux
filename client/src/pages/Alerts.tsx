@@ -111,6 +111,17 @@ const Alerts: React.FC = () => {
                 parameters: { action_text: action },
             });
             setActionStates(prev => ({ ...prev, [key]: 'done' }));
+            
+            // Optimistic update status to investigating
+            if (selectedAlert.status === 'open') {
+                setLocalModifications(prev => ({
+                    ...prev,
+                    [selectedAlert.id]: { status: 'investigating' as const }
+                }));
+                setAlerts(prev =>
+                    prev.map(a => a.id === selectedAlert.id ? { ...a, status: 'investigating' as const } : a)
+                );
+            }
         } catch (err) {
 console.error('Failed to execute action:', err);
     setActionStates(prev => ({ ...prev, [key]: 'error' }));

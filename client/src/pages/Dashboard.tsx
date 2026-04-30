@@ -2,15 +2,16 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
-import { MOCK_COMPLIANCE } from '../data/mock';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Cell } from 'recharts';
 import { ArrowRight, Send, Loader2, CheckCircle2, AlertTriangle, Shield } from 'lucide-react';
 import { Modal } from '../components/ui/Modal';
-import { Alert } from '../types';
+import { Alert, ComplianceStatus } from '../types';
 import { cn } from '../lib/utils';
-import { fetchRealtimeMetrics, fetchMetrics, RealtimeComponent, fetchAlerts, BackendAlert, transformBackendAlert } from '../services/api';
+import { fetchRealtimeMetrics, fetchMetrics, RealtimeComponent, fetchAlerts, BackendAlert, transformBackendAlert, fetchComplianceStatus } from '../services/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import ReactMarkdown from 'react-markdown';
+import { useNavigate } from 'react-router-dom';
+import { arceuxWS } from '../services/websocket';
 
 
 // Dynamic Heartbeat Visualization - generates SVG path from history data
@@ -99,12 +100,100 @@ const SEVERITY_COLORS = {
     LOW:      'hsl(217 91% 60%)',
 };
 
+const COMPLIANCE_LABELS: Record<string, string> = {
+    irdai: 'IRDAI',
+    gdpr: 'GDPR',
+    soc2: 'SOC 2',
+    iso27001: 'ISO 27001',
+    pci_dss: 'PCI DSS',
+};
+
+const STATUS_VARIANT = {
+    compliant: 'healthy',
+    review_needed: 'degraded',
+    action_required: 'down',
+} as const;
+
+function formatCountdown(mins: number): string {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return h > 0 ? `${h}h ${m}m remaining` : `${m}m remaining`;
+}
+
+const COMPLIANCE_KEYS = ['irdai', 'gdpr', 'soc2', 'iso27001', 'pci_dss'] as const;
+
+const ComplianceCard: React.FC<{
+    status: ComplianceStatus | null;
+    liveIrdaiRemaining: number | null;
+}> = ({ status, liveIrdaiRemaining }) => {
+    if (!status) {
+        return (
+            <div className="p-3 h-full flex flex-col justify-between">
+                {COMPLIANCE_KEYS.map(key => (
+                    <div key={key} className="flex flex-col gap-0.5 border-b border-border/30 last:border-0 pb-1 last:pb-0 flex-1 justify-center min-h-0">
+                        <div className="h-2.5 w-14 rounded bg-muted/50 animate-pulse" />
+                        <div className="h-3.5 w-20 rounded bg-muted/40 animate-pulse mt-0.5" />
+                    </div>
+                ))}
+            </div>
+        );
+    }
+
+    return (
+        <div className="p-3 h-full flex flex-col justify-between">
+            {COMPLIANCE_KEYS.map(key => {
+                const item = status[key];
+                const showCountdown =
+                    key === 'irdai' &&
+                    item.status === 'action_required' &&
+                    liveIrdaiRemaining != null;
+                return (
+                    <div
+                        key={key}
+                        className="flex flex-col gap-0.5 border-b border-border/30 last:border-0 pb-1 last:pb-0 flex-1 justify-center min-h-0"
+                        title={item.reason}
+                    >
+                        <span className="text-[10px] font-medium truncate leading-tight">
+                            {COMPLIANCE_LABELS[key]}
+                        </span>
+                        <Badge
+                            variant={STATUS_VARIANT[item.status]}
+                            className="h-3.5 px-1.5 text-[8px] capitalize w-fit"
+                        >
+                            {item.status.replace(/_/g, ' ')}
+                        </Badge>
+                        {showCountdown && (
+                            <span className={cn(
+                                'text-[8px] font-mono leading-tight',
+                                liveIrdaiRemaining! < 30
+                                    ? 'text-red-400 animate-pulse'
+                                    : liveIrdaiRemaining! < 60
+                                        ? 'text-red-400'
+                                        : 'text-muted-foreground'
+                            )}>
+                                {formatCountdown(liveIrdaiRemaining!)}
+                            </span>
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
 const Dashboard: React.FC = () => {
+    const navigate = useNavigate();
     const chatBottomRef = useRef<HTMLDivElement>(null);
     const [chatInput, setChatInput] = useState('');
-    const [messages, setMessages] = useState<{ role: 'user' | 'ai', content: JSX.Element | string }[]>([
-        { role: 'ai', content: <>Hello. I'm <strong>Arceux AI</strong>, your SOC analyst assistant. Ask me about active alerts, threat patterns, or use the quick actions below to get started.</> }
-    ]);
+    const [messages, setMessages] = useState<{ role: 'user' | 'ai', content: JSX.Element | string }[]>(() => {
+        const history = arceuxWS.getConversationHistory();
+        if (history.length > 0) {
+            return history.map(msg => ({ role: msg.role as 'user' | 'ai', content: msg.content }));
+        }
+        return [
+            { role: 'ai', content: <>Hello. I'm <strong>Arceux AI</strong>, your SOC analyst assistant. Ask me about active alerts, threat patterns, or use the quick actions below to get started.</> }
+        ];
+    });
     useEffect(() => {
         chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
@@ -123,6 +212,11 @@ const Dashboard: React.FC = () => {
   const [liveAlerts, setLiveAlerts] = useState<Alert[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(true);
 
+  // Compliance status
+  const [complianceStatus, setComplianceStatus] = useState<ComplianceStatus | null>(null);
+  const [complianceFetchTime, setComplianceFetchTime] = useState<number>(0);
+  const [liveIrdaiRemaining, setLiveIrdaiRemaining] = useState<number | null>(null);
+
   // System Check modal state
   const [systemCheckLoading, setSystemCheckLoading] = useState(false);
   const [systemCheckError, setSystemCheckError] = useState<string | null>(null);
@@ -132,6 +226,38 @@ const Dashboard: React.FC = () => {
     const selectedService = useMemo(() =>
         realtimeComponents.find(c => c.id === selectedServiceId) || null,
         [realtimeComponents, selectedServiceId]);
+
+    // Compliance polling + countdown
+    const refreshCompliance = useCallback(async () => {
+        try {
+            const data = await fetchComplianceStatus();
+            setComplianceStatus(data);
+            setComplianceFetchTime(Date.now());
+        } catch {
+            console.warn('Failed to fetch compliance status');
+        }
+    }, []);
+
+    useEffect(() => {
+        refreshCompliance();
+        const id = setInterval(refreshCompliance, 60000);
+        return () => clearInterval(id);
+    }, [refreshCompliance]);
+
+    useEffect(() => {
+        const apiRemaining = complianceStatus?.irdai?.time_remaining_minutes;
+        if (complianceStatus?.irdai?.status !== 'action_required' || apiRemaining == null) {
+            setLiveIrdaiRemaining(null);
+            return;
+        }
+        const update = () => {
+            const elapsed = Math.floor((Date.now() - complianceFetchTime) / 60000);
+            setLiveIrdaiRemaining(Math.max(0, apiRemaining - elapsed));
+        };
+        update();
+        const id = setInterval(update, 60000);
+        return () => clearInterval(id);
+    }, [complianceStatus, complianceFetchTime]);
 
     // Poll real-time metrics from backend
     useEffect(() => {
@@ -178,6 +304,19 @@ const Dashboard: React.FC = () => {
             if (['critical', 'high'].includes(alert.severity)) {
                 setLiveAlerts(prev => [alert, ...prev.filter(a => a.id !== alert.id)].slice(0, 10));
             }
+        }
+    );
+
+    useWebSocket<{ alert_id: string; status: string }>(
+        'alert_status_updated',
+        () => {}
+    );
+
+    useWebSocket<{ compliance: ComplianceStatus }>(
+        'compliance_updated',
+        (msg) => {
+            setComplianceStatus(msg.compliance);
+            setComplianceFetchTime(Date.now());
         }
     );
 
@@ -256,6 +395,7 @@ const handleSystemCheck = () => {
         const userMessage = chatInput;
 
         setMessages(prev => [...prev, { role: 'user' as const, content: userMessage }]);
+        arceuxWS.addToConversationHistory('user', userMessage);
         setChatInput('');
 
         setMessages(prev => [...prev, {
@@ -293,6 +433,7 @@ const handleSystemCheck = () => {
                 msgs[msgs.length - 1] = { role: 'ai', content: data.response };
                 return msgs;
             });
+            arceuxWS.addToConversationHistory('assistant', data.response);
         } catch (error) {
             console.error('Chat error:', error);
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -323,14 +464,17 @@ const handleSystemCheck = () => {
                 content: typeof msg.content === 'string' ? msg.content : ''
             }));
 
+        const userText = labelMap[action] ?? action;
+
         setMessages(prev => [
             ...prev,
-            { role: 'user' as const, content: labelMap[action] ?? action },
+            { role: 'user' as const, content: userText },
             {
                 role: 'ai' as const,
                 content: <>Analyzing<Loader2 className="h-3 w-3 animate-spin inline ml-1" />...</>
             }
         ]);
+        arceuxWS.addToConversationHistory('user', userText);
 
         try {
             const response = await fetch('http://localhost:8000/chat', {
@@ -351,6 +495,7 @@ const handleSystemCheck = () => {
                 msgs[msgs.length - 1] = { role: 'ai', content: data.response };
                 return msgs;
             });
+            arceuxWS.addToConversationHistory('assistant', data.response);
         } catch (error) {
             console.error('Quick action error:', error);
             await new Promise(resolve => setTimeout(resolve, 1000));
@@ -366,6 +511,15 @@ const handleSystemCheck = () => {
   };
 
     const handleActionClick = (action: string) => {
+        if (action.toLowerCase().includes('review immediately') || action.toLowerCase().includes('verify user')) {
+            navigate('/alerts', { 
+                state: { 
+                    focusAlertId: selectedAlert?.id 
+                } 
+            });
+            setSelectedAlert(null);
+            return;
+        }
         setMessages(prev => [...prev, {
             role: 'ai',
             content: `Executing recommended action: "${action}"...`
@@ -686,19 +840,7 @@ const handleSystemCheck = () => {
 
                 <div className="col-span-2 row-span-5 flex flex-col min-h-0">
                     <Card title="Compliance" className="flex-1 min-h-0 overflow-hidden" noPadding>
-                        <div className="p-3 h-full flex flex-col justify-between">
-                            {MOCK_COMPLIANCE.map((item, idx) => (
-                                <div key={idx} className="flex flex-col gap-0.5 border-b border-border/30 last:border-0 pb-1 last:pb-0 flex-1 justify-center min-h-0">
-                                    <span className="text-[10px] font-medium truncate leading-tight">{item.name}</span>
-                                    <Badge
-                                        variant={item.status === 'compliant' ? 'healthy' : item.status === 'review_needed' ? 'degraded' : 'down'}
-                                        className="h-3.5 px-1.5 text-[8px] capitalize w-fit"
-                                    >
-                                        {item.status.replace('_', ' ')}
-                                    </Badge>
-                                </div>
-                            ))}
-                        </div>
+                        <ComplianceCard status={complianceStatus} liveIrdaiRemaining={liveIrdaiRemaining} />
                     </Card>
                 </div>
 
