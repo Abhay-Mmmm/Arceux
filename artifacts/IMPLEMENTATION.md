@@ -1,8 +1,8 @@
 # Arceux — Implementation Overview
 
-**Version:** 1.4.0
-**Last Updated:** 2026-04-30  
-**Status:** Active Development — Early Prototype
+**Version:** 2.0.0
+**Last Updated:** 2026-05-04
+**Status:** Demo-Ready Prototype
 
 ---
 
@@ -50,6 +50,19 @@ Arceux/
 │   └── log_generator.py           # Synthetic log generator + attack sequences
 └── artifacts/                     # Design docs and implementation notes
 ```
+
+---
+
+## Repository Structure
+
+Documentation and demo materials added for the v2.0.0 public release:
+
+| File | Purpose |
+|------|---------|
+| `README.md` | Full project overview for GitHub — overview, tech stack, detection system table, agent pipeline table, API reference, getting started, known limitations, roadmap |
+| `CONTRIBUTING.md` | Local setup instructions, branch naming conventions, PR guidelines, code style rules, and bug report format |
+| `artifacts/ARCHITECTURE.md` | Mermaid system architecture diagram showing all components and their connections, plus prose descriptions of each component |
+| `artifacts/DEMO_SCRIPT.md` | 5-minute presenter guide with minute-by-minute talk tracks, exact click paths, and answers to common audience questions |
 
 ---
 
